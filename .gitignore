@@ -2,7 +2,8 @@
 node_modules/
 
 # Build output
-dist/
+# Commit dist/ because the parent arcade serves DSGolf as static files from
+# game-repos/dsgolf/dist on hosts that do not run the submodule build.
 build/
 .vite/
 
