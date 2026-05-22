@@ -1,0 +1,330 @@
+Original prompt: can you make it so that when youre on the green theres a better putting view and the aim and stuff is improved of this game and just make overall improvements
+
+Notes:
+- Started by inspecting the React Three Fiber golf game in `src/App.tsx`, `layout.ts`, `clubs.ts`, and scene components.
+- Current green behavior uses the same idle camera as full shots and a coarse global aim step.
+
+TODO:
+- Added a green-specific putting camera and automatic pin alignment when the ball settles on the green.
+- Added finer putting aim steps, Shift fine aim, Alt coarse aim, and `Q` to re-aim at the pin.
+- Improved putter preview to simulate roll-out with a stop marker and cup alignment guide.
+- Added a target power marker on the HUD power meter for putting.
+- `npm run build` passes. Vite reports only the existing large chunk warning.
+- Reworked the golfer model so the club starts addressed to the ball, charges into a backswing, swings through impact, and follows through.
+- Passed the selected club into `Player`; driver, irons, wedge, and putter now render with different shaft/head proportions.
+- Adjusted player stance placement so the addressed club lines up with the ball more consistently.
+- Re-ran `npm run build`; it passes with the same Vite large chunk warning.
+- Changed post-shot landing logic so the player auto-aims at the hole after every settled shot, not just on the green.
+- Added QoL pass: `V` toggles an idle overhead planning camera, mouse drag adjusts aim, HUD power meter shows recommended ghost fill, non-putter previews show an orange landing ring, and rolling balls settle sooner at low speed.
+- Added LAN host/controller refactor: `server.mjs` serves the built app and relays phone actions by lobby code; app now has menu, host, solo, and phone controller screens.
+- Phone controller can aim, pick clubs, auto-pick, toggle view, re-aim at pin, and send swing power using device motion with fallback slider.
+- `npm run build` passes. `npm run lan` started successfully on port 3000 and printed a local-network controller URL.
+- Fixed "phone swing always falls back to fallback power" issue.
+  - Root cause: iOS Safari requires HTTPS for `DeviceMotionEvent.requestPermission()`. Plain-HTTP LAN got `denied`, so the motion listener never attached and the high `samples > 2` gate fell through to the slider value.
+  - `server.mjs` now supports `HTTPS=1 npm run lan`: auto-generates a self-signed cert in `.cert/` via `openssl` and listens on `HTTPS_PORT` (default 3443) in parallel with HTTP. Prints `https://<lan-ip>:3443/?controller=1` for the phone.
+  - `PhoneController` refactor: explicit "Enable Motion" button runs `requestPermission` once with the user gesture; a continuous `devicemotion` listener registered after grant tracks live + per-swing peaks. Swing is "armed" while the button is held. Insecure-context detection surfaces a clear "needs HTTPS" message instead of silently failing.
+  - Motion qualifies when `samples >= 1` and peak accel > 11 m/s² (was `samples > 2` with no peak floor). Live diagnostic shows current m/s², swing sample count, and peak so the user can confirm sensors are firing.
+  - Host screen note updated to point at `HTTPS=1 npm run lan`.
+  - `npm run build` and `node --check server.mjs` both pass.
+- Added `npm run play` — one-shot "do everything" launcher. `scripts/play.mjs` scans the LAN ports (3000 + 3443 by default, overridable via `PORT`/`HTTPS_PORT`), `SIGTERM`s any process holding them, escalates to `SIGKILL` after 400ms if needed, then runs `npm run build` and spawns `node server.mjs` with `HTTPS=1` (set `HTTPS=0` to skip TLS). Forwards `SIGINT`/`SIGTERM` to the child server so Ctrl-C cleans up. Uses `lsof` (present on macOS/Linux). Pass `--reset-cert` (or set `REGEN_CERT=1`) to force cert regeneration.
+- Fixed "phone says can't connect to server" issue.
+  - Root cause: macOS ships LibreSSL as `/usr/bin/openssl`, and LibreSSL's `req` does NOT support `-addext`. The old cert was generated with no `subjectAltName` extension. iOS 13+ refuses to even establish a TLS connection to a cert without a SAN covering the host — the handshake aborts before any cert-warning UI, so the phone shows a connection error rather than a trust prompt.
+  - `ensureSelfSignedCert` now writes an openssl config file with the SAN section and invokes `openssl req -config ... -extensions v3_req`. This form works on both LibreSSL and OpenSSL.
+  - SANs always include `DNS:localhost`, `IP:127.0.0.1`, and every current external IPv4 from `os.networkInterfaces()`.
+  - On startup, the existing cert is inspected via `openssl x509 -text`. If the SAN is missing or doesn't cover the current LAN IPs, the cert is regenerated automatically. Set `REGEN_CERT=1` to force.
+  - Verified: a fresh run now embeds `IP Address:192.168.4.28` in the cert SAN.
+  - Laptop "Not Secure" badge is expected for self-signed certs — click Advanced → Proceed once; the connection is still TLS-encrypted.
+- Made the ball launch read as part of the visible swing (not "after" it).
+  - The ball already fired at `IMPACT_T` (mid-swing), but the camera flipped to ball-follow the instant `phys.mode` changed, so the follow-through happened off-camera and the player perceived a delay.
+  - Camera now stays anchored at the player position for the entire swing animation. `lookAt` pans to follow the ball once it's struck, so the user sees the impact + follow-through with the ball flying out of frame. After `swingStartRef` clears (t≥1), camera transitions to standard ball-follow.
+  - Bumped `SWING_DURATION` 0.45 → 0.55s and `IMPACT_T` 0.35 → 0.42 so the downswing is more readable and the impact lines up better with the visible club-to-ball moment.
+  - `swingAnchorRef` stashes the ball position at swing start; the player-anchored camera reads from it.
+- Improved the player model.
+  - Lower body now a `hipsRef` group containing a pelvis, belt, tapered pants, and shoes. Hips rotate at ~55% of the torso turn so the lower body engages with the swing.
+  - Torso wears a forward address lean (`rotation.x = 0.16`), with a white collar and a visible neck. Head/hat are mounted to the torso so they tilt with the lean.
+  - Arms are now two-segment: shirt-colored upper arm + skin forearm with a sphere "elbow" joint. Two hands grip the club — a white glove on the leading hand and a skin trailing hand lower on the grip. Added a black grip wrap below the hands.
+  - Added pupil dots on the head for character.
+  - Eased turn ranges slightly (0.32/-0.5) so the body coils harder on backswing and unwinds more on follow-through.
+  - `Player` now accepts optional `pantsColor`, `shoeColor`, `skinColor` props alongside the existing `shirtColor`/`hatColor`.
+- Second pass on the player model after a screenshot review surfaced 14 specific issues. New version of `Player.tsx`:
+  - Added a `Bone` helper that draws a cylinder between two arbitrary points (computes length, midpoint, and a Quaternion from `setFromUnitVectors(Y, dir)`). Used for thighs, calves, upper arms, and forearms.
+  - Two real shoulders: shoulder yoke (0.46 wide box) plus deltoid sphere bumps at z = ±0.20. Swing pivot is now centered between the shoulders instead of at the right shoulder.
+  - Each upper arm anchors to its own shoulder and converges via an elbow joint to a single grip point below the chest, so the arms form a triangle instead of two parallel tubes from one spot.
+  - Knee bend: knees pushed forward of the hip→ankle line via `KNEE_PUSH_X`, with a sphere knee cap. Legs are split into thigh + calf segments rather than one cylinder.
+  - V silhouette: pelvis narrowed to 0.28 wide; shoulder yoke is 0.46 wide.
+  - Hat brim re-shaped to 0.22 × 0.02 × 0.18 (long forward, narrower sideways) and positioned over the forehead so it reads as a baseball cap rather than a square plate.
+  - Eyes mirrored to z = ±0.06 (was asymmetric).
+  - Hands replaced with stacked cylinders that wrap the shaft (white glove on top, skin trailing hand below) plus a black grip wrap that pokes out above and below the hands.
+  - Shoes now have a lighter sole (`soleColor`) that protrudes around the upper, so they're actually visible against dark pants.
+  - Belt buckle on the lead side for a small detail accent.
+  - Trailing-foot heel lift on follow-through: the trail foot group's origin is pinned to the toe, and `rotation.x = -heelLift` pivots the heel up after `swing > 0.5`.
+  - Removed the thick skin-colored neck cylinder; head sits directly above the collar.
+  - `Player` props now also accept `soleColor`.
+  - Known geometric limitation: with a fixed shoulder height, shorter clubs (putter/wedge) don't fully reach the ball — the club head hovers slightly. Same as before this refactor. Worth a follow-up that varies stance lean per club.
+- Third player-model pass for "looks terrible" screenshot feedback:
+  - Replaced most boxy body parts with rounded/scaled sphere and capsule forms.
+  - Added tapered `Bone` support for thighs, calves, upper arms, and forearms so limbs no longer look like straight pipes.
+  - Rounded shoes and soles, softened pelvis/torso shapes, widened shoulders, leaned torso into address, and rebuilt the hat as a rounded crown/band/brim.
+  - Repositioned elbows, hands, grip wrap, and shaft around a single cleaner swing assembly while preserving the existing charge/swing animation.
+  - `npm run build` passes with the same existing large chunk warning.
+- Fourth player-model pass from follow-up screenshot:
+  - Split the shirt into separate upper/lower torso volumes so it reads less like one red ball.
+  - Lowered and pushed the hands forward; retargeted elbows/forearms so the arms connect more clearly to the grip.
+  - Added a small neck and ears, reduced the nose, and tilted the head/hat slightly down toward the ball.
+  - Shortened/thinned the hat brim, thinned the white shoe soles, and replaced the single putter-head block with a small multi-piece putter shape.
+  - `npm run build` passes with the same existing large chunk warning.
+- Fifth player-model pass from screenshot at 8:21:
+  - Blended the red shirt into one main mass plus a subtle chest bulge, removing the hard horizontal torso seam.
+  - Replaced the red waist flap with a tucked dark-red shirt hem above the belt.
+  - Retargeted elbow/wrist points so the visible skin sections are short wrists instead of long vertical forearms.
+  - Made the hands smaller and closer together on the grip; shortened the visible grip wrap.
+  - Tilted the head farther down and lowered the eyes slightly so the character looks more toward the ball.
+  - `npm run build` passes with the same existing large chunk warning.
+- Sixth player-model pass from 8:25 screenshot:
+  - Moved elbow endpoints back out near the shoulder line so the red sleeves no longer fold inward toward the chest.
+  - Reduced elbow joint size and adjusted wrist endpoints so arms hang down first, then converge near the grip.
+  - Added X-axis swing-plane rotation: backswing now sweeps to the trail side, impact returns through center, and follow-through moves to the lead side instead of the club going straight back through the body.
+  - Kept putter swing-plane movement smaller than full clubs.
+  - `npm run build` passes with the same existing large chunk warning.
+- Seventh player-model pass:
+  - Reduced the lateral swing-plane values because the previous fix read too inside-to-outside.
+  - New swing path has a modest backswing plane, returns almost neutral at impact, then gradually exits left only after the strike.
+  - Putter uses even smaller lateral plane values.
+  - `npm run build` passes with the same existing large chunk warning.
+- Phone swing controller pass:
+  - Extended controller swing actions to include `pathError`, `pathQuality`, and a feedback `label`.
+  - Host now applies phone swing path errors as temporary left/right aim misses and slightly reduces effective power for poor path quality.
+  - Phone samples motion axes during the held swing, scores whether the swing stays mostly on one dominant plane, labels it as good/path left/path right, and reports plane ratio after release.
+  - Reworked motion power curve to be much less sensitive: uses baseline-corrected/linear acceleration plus rotation with nonlinear scaling, no tempo bonus, and a higher threshold before 100% power.
+  - Fallback power still works when motion is unavailable or no peak is detected.
+  - `npm run build` passes with the same existing large chunk warning.
+- Club/course pass:
+  - Expanded the bag from 5 clubs to 9: Driver, 3 Wood, 4 Hybrid, 6 Iron, 8 Iron, 9 Iron, Pitching Wedge, Sand Wedge, and Putter.
+  - Updated club visuals for woods/hybrid/wedges so the player model changes club length/head shape by category.
+  - Removed this hole's water hazard from rendering and from surface classification, so that area now plays as fairway/rough instead of water.
+  - Host club list wraps and phone controller club grid changed to 3 columns to fit the larger bag.
+  - `npm run build` passes with the same existing large chunk warning.
+- Multi-hole course pass:
+  - Refactored `layout.ts` from one hard-coded hole into `COURSE_HOLES` plus `makeHoleLayout`.
+  - Added Hole 2 as a 325-yard par 4 with a wider fairway, larger green, cup offset, and a greenside bunker on the opposite side.
+  - Updated `Hole`, `Game`, trajectory preview, surface classification, aiming, distance, camera, and reset logic to use the active hole layout.
+  - Completing Hole 1 now shows the holed state briefly, then automatically advances to Hole 2 and resets ball/strokes/club/aim for the new tee.
+  - HUD now displays hole number/total and par; final hole completion says round complete.
+  - `npm run build` passes with the same existing large chunk warning.
+- Phone path/camera-player alignment fix:
+  - Bad phone swing path no longer mutates `aimRef` directly.
+  - Added `shotAimOffsetRef`: host/player/camera keep using the intended aim line, while the shot velocity alone receives the one-shot left/right miss offset at impact.
+  - Offset clears after impact, on reset/hole setup, and when starting a keyboard swing.
+  - Fixes the issue where after a left/right path miss the camera could face the cup while the player still appeared aligned to the miss line.
+  - `npm run build` passes with the same existing large chunk warning.
+- Creative par-5 pass:
+  - Added Hole 3 as a 545-yard par 5.
+  - Extended layout data to support multiple fairway zones and multiple elliptical bunkers instead of only a single straight fairway and one bunker.
+  - Hole 3 uses a dogleg/segmented fairway: opening chute, left landing bulb, diagonal neck, central layup area, angled second-shot corridor, and approach bulb.
+  - Added five bunkers around landing zones and the green, plus extra tree pressure around the dogleg and approach.
+  - Surface classification now checks all shaped fairway zones and bunker ellipses, so the new visual hole plays differently rather than just looking different.
+  - `npm run build` passes with the same existing large chunk warning.
+- Phone swing result visualization:
+  - Phone controller now stores a compact motion trace while the swing button is held.
+  - After release, the phone switches to a swing result screen instead of immediately returning to controls.
+  - Result screen shows a glowing SVG swing path trace, path score, miss tendency, power meter, path meter, peak acceleration, and plane ratio.
+  - Added a Continue button that clears the result and returns to the normal phone swing controls.
+  - Fallback/no-motion swings still show a generated trace and fallback label.
+  - `npm run build` passes with the same existing large chunk warning.
+- Player alignment fix after screenshot:
+  - Root cause: player placement/rotation used a different yaw sign convention than the camera/aim vectors. The camera aim uses `aimDir = [sin(aim), -cos(aim)]` and `rightDir = [cos(aim), sin(aim)]`, but player stance used a mixed sign and yawed with `+aim`.
+  - Fixed idle player setup to stand at `-rightDir` from the ball and yaw with `-aim`, because the model's local +X faces the ball while the target line is perpendicular to the player.
+  - `npm run build` passes with the same existing large chunk warning.
+- High-loft wedge pass:
+  - Added lower-carry 58, 60, 62, and 64 degree wedges to the bag.
+  - Gave lob wedges shorter wedge visuals so the player model changes club length/head shape for the new clubs.
+  - Added keyboard bracket controls to cycle through clubs beyond the first nine number-key slots.
+  - Made the phone controller scrollable and slightly denser so the expanded club grid fits better.
+  - `npm run build` passes with the same existing large chunk warning.
+- Phone club selector pass:
+  - Replaced the phone controller club grid with a selected-club carousel.
+  - Added a large visual club preview that changes shape/color for woods, irons, wedges, and putter.
+  - Added left/right arrow controls, swipe left/right handling on the preview card, and compact dots for direct club selection.
+  - Selecting a club from the carousel immediately sends that club index to the host.
+  - Phone selector initializes to the same suggested club as the host at the first tee.
+  - `npm run build` passes with the same existing large chunk warning.
+- Phone/host club sync fix:
+  - Added a `/api/lobbies/state` endpoint and `host_state` SSE event so the host can publish current phone-facing state.
+  - Host now publishes the selected club whenever it changes from manual selection, host auto-pick, post-shot suggested club selection, hole setup, or controller connection.
+  - Phone controller listens for `host_state` and updates its club carousel when the game automatically selects a different club.
+  - Fixes the phone Auto Club button feeling broken because the host-side club change now reflects back on the phone.
+  - `npm run build` and `node --check server.mjs` pass with the same existing large chunk warning.
+- Hole overview and minimap pass:
+  - Added a pre-hole overlay before each hole with a top-down hole map, par/yardage, suggested strategy, selected club stats, and a round scoreboard.
+  - Added scorecard tracking for completed holes and relative-to-par display.
+  - Start Hole button, Enter, or Space dismisses the overview; keyboard/pointer swings are blocked while the overview is open.
+  - Added an in-play top-left minimap using the same hole layout data, including fairways, bunkers, green, tee, cup, ball, and aim line.
+  - `npm run build` passes with the same existing large chunk warning.
+- Putting mechanics split:
+  - Host now syncs phone context for putter mode, distance, lie, and recommended power in `host_state`.
+  - Phone motion tracking uses lower putting sample thresholds and records signed gyro samples while armed.
+  - `finishSwing` now branches to a separate `finishPutt` path for putters, with lower real-motion floor, tempo ratio, acceleration-through-impact strike, gyro-based start line, and pace feedback.
+  - Putts send `shape: 0` and no longer receive the full-swing quality power reduction on the host.
+  - Phone putt result screen replaces shape/quality views with top-down stroke path, tempo bar, start-line chip, distance/pace chip, and strike score.
+  - Controller live button changes from `SWING` to `PUTT`, and practice mode changes to `Practice Putt` when the selected club is the putter.
+  - `npm run build` passes with the same existing large chunk warning.
+- Swing shape label thresholds:
+  - Added shared shape naming for normal swings: under 3° = Straight, 3–12° = Fade/Draw, and 12°+ = Slice/Hook.
+  - Result labels and face-on subtitles now use Slice/Hook instead of Big fade/Big draw for extreme curves.
+  - `npm run build` passes with the same existing large chunk warning.
+- Swing target calibration first pass:
+  - Added phone-side handedness selection for full swings (`Righty` / `Lefty`) plus a `Calibrate Target` control.
+  - Calibration captures the current gravity vector and a neutral target axis from the phone's long-axis grip, then locks it for swings started afterward.
+  - Full-swing shape now prefers calibrated target-relative path angle when calibration exists, falling back to the previous phone/gravity-frame `computeShapeAngle` when it does not.
+  - Right-handed and left-handed shape signs are mirrored so righty outside-in maps toward fade/slice and lefty mirrors correctly.
+  - Status text marks calibrated swings, and `npm run build` passes with the same existing large chunk warning.
+- Automatic swing calibration update:
+  - Removed the in-round `Calibrate Target` control.
+  - Added handedness selection to the phone join/profile flow and persisted it through lobby join/player update payloads.
+  - Each `SWING` / `Practice Swing` press now captures the current phone orientation as the neutral target calibration before motion samples start.
+  - Target-relative shape still mirrors righty/lefty signs, now using the player's chosen handedness.
+  - `npm run build` and `node --check server.mjs` pass with the same existing large chunk warning.
+- Auto-detected swing capture:
+  - Replaced phone hold/release swing buttons with tap-to-start capture phases: `Hold Still`, `Swing!`, and `Recording`.
+  - Phone waits for roughly 0.38s of stillness before auto-calibrating the target/grip orientation.
+  - Recording starts when accel/gyro motion crosses a swing-start threshold, then auto-stops after the peak when motion settles or after a max timeout.
+  - Practice and live swing buttons now use `onClick`; releasing the screen no longer ends the swing, so the player can hold the follow-through naturally.
+  - Cancel button aborts an active capture, and fallback mode still produces a result when motion permission is unavailable.
+  - `npm run build` passes with the same existing large chunk warning.
+- Phone swing fallback fix:
+  - Root cause of instant fallback: `startSwing` treated missing motion permission as permission to immediately fire a fallback swing/putt.
+  - `SWING` / `Practice Swing` now prompts `Enable Motion first` and calls the motion permission flow instead of finishing a fallback shot.
+  - Fallback remains available, but only through explicit `Fallback Practice` / `Fallback Shot` buttons shown while ready and motion is unavailable.
+  - Motion permission errors are visible even after the phone is in the READY state.
+  - `npm run build` passes with the same existing large chunk warning.
+- Target-relative swing analysis pass:
+  - Replaced the old PCA/self-axis projection for full-swing feedback with a calibrated target-frame projection.
+  - Full-swing face-on view now plots target-line motion vs height; down-the-line view now plots side-of-target vs height.
+  - Full-swing path quality and launch miss now come from calibrated target-side deviation/path angle instead of the swing's own best-fit axis.
+  - Putting stroke analysis now uses the same calibrated target frame for top-down path, and putt start line blends gyro face angle with a smaller target-path contribution.
+  - Removed the obsolete `projectSwingFrame` helper so future analysis does not accidentally mix PCA/self-relative and target-relative frames again.
+  - `npm run build` passes with the same existing large chunk warning.
+- Shape saturation fix:
+  - Root cause of only seeing max 26° slices/hooks: the raw target-relative path angle was often much larger than the old hard clamp, so shape pinned to `SHAPE_MAX`.
+  - Shape now uses the weighted target-path angle already used by the target-frame metrics, mirrors it by handedness, and passes it through `compressShapeAngle`.
+  - `compressShapeAngle` keeps a 6° deadzone but uses a soft tanh limiter with a 22° ceiling, so moderate misses become fades/draws instead of instantly maxing out.
+  - Removed the older unused target-shape helper that averaged the second half of raw samples.
+  - `npm run build` passes with the same existing large chunk warning.
+- Target side-axis sign fix:
+  - Root cause of "real slice reads as hook": calibrated target frame defined `sideRight` as `up × target`, which points left in the game's target/up convention.
+  - Changed target-frame side axis to `target × up`, so right of target is actually positive right.
+  - This flips full-swing path/shape sign, down-the-line side display, and the smaller target-path contribution to putting start line.
+  - Right-handed outside-in/left path should now read as fade/slice rather than hook/draw.
+  - `npm run build` passes with the same existing large chunk warning.
+- Player builds pass:
+  - Added player builds with ratings: Default (75/65/65), McRoar (98/86/88), Big Bryce (100/82/80), Chef Scott (92/97/98), The Tiger (97/100/100), and X Shuffle (89/94/95).
+  - Phone join flow now asks for build before name; phone lobby allows changing build before the host starts.
+  - Host lobby local players can also select builds, and phone-selected build IDs persist through `server.mjs` lobby join/update payloads.
+  - Power modifies non-putter effective carry/stock yardage, including auto club selection, recommended power, trajectory preview, and actual shot velocity.
+  - Control reduces the actual hook/slice curve applied by the host, and Path reduces the actual push/pull launch miss.
+  - Host and phone UI show the active player's build and adjusted stock carry.
+  - `npm run build` and `node --check server.mjs` pass with the same existing Vite large chunk warning.
+- Phone join layout cleanup:
+  - Simplified the first phone join screen to code, name, Connect, and Back so the Connect button stays visible on small phones.
+  - Moved build, handedness, and outfit selection to the post-connect phone lobby.
+  - Phone lobby now scrolls vertically so the build cards and customization controls remain reachable.
+  - `npm run build` and `node --check server.mjs` pass with the same existing Vite large chunk warning.
+- Power build scaling update:
+  - Updated `powerCarryFactor` so 75 power remains the base bag, while 100 power gives the 240-yard driver a 350-yard stock carry.
+  - The new max factor is `350 / 240 = 1.458x`, interpolated linearly from 75 to 100 power and applied to non-putter club carry.
+  - `npm run build` and `node --check server.mjs` pass with the same existing Vite large chunk warning.
+- High-loft flight shape update:
+  - Added `loftHeightBias` in `src/clubs.ts` so higher-loft clubs launch with more vertical speed and less horizontal speed.
+  - Driver/woods stay effectively unchanged; short irons and wedges now climb higher and land steeper while preserving listed carry.
+  - `clubInitialVelocity` now preserves carry via `range = 2 * horizontalSpeed * verticalSpeed / gravity`.
+  - `npm run build` and `node --check server.mjs` pass with the same existing Vite large chunk warning.
+- Forearm controller mount setting:
+  - Added `controllerMount` to `GolfPlayer`, defaulting to `club`.
+  - Phone lobby now has a `Controller Mount` selector with `Club Grip` and `Forearm`.
+  - `server.mjs` persists the mount setting through lobby join/update payloads.
+  - Swing calibration now uses the mount mode: club mode keeps the old phone-long-axis target assumption; forearm mode treats the phone as strapped along the lead forearm with the top toward the hand/wrist and derives target as perpendicular to the forearm, mirrored by handedness.
+  - `npm run build` and `node --check server.mjs` pass with the same existing Vite large chunk warning.
+- Putting build rating:
+  - Added `putting` as a fourth build stat. Default is 50.
+  - Current build putting values: Default 50, McRoar 84, Big Bryce 78, Chef Scott 99, The Tiger 100, X Shuffle 94.
+  - Added PUT to build labels in phone/host UI.
+  - Putts now apply `puttingMistakeFactor`: 50 putting leaves errors unchanged; 100 putting halves putt mistakes.
+  - Putting forgiveness pulls bad putt speed toward recommended pace, reduces start-line miss, and improves weak strike toward clean contact before sending the shot to the host.
+  - `npm run build` and `node --check server.mjs` pass with the same existing Vite large chunk warning.
+- Realistic lie outcome system:
+  - Added lie-adjusted club carry, loft, and bounce via `effectiveClubForLie`.
+  - Actual shot launch now uses the current lie, not just the player's selected club/build. Rough and bunker reduce carry based on club loft; bunkers heavily punish low-loft clubs.
+  - Auto club and recommended power now use lie-adjusted effective carry. From bunkers, auto club excludes low-loft clubs and falls back to the best playable higher-loft option instead of driver.
+  - Phone/host stock carry and trajectory preview now reflect the current lie.
+  - Bad lies now multiply path/shape errors: rough punishes low-loft clubs, and bunkers punish low-loft clubs heavily.
+  - `npm run build` and `node --check server.mjs` pass with the same existing Vite large chunk warning.
+- Visual collaboration pass:
+  - Initialized `collab.md` with a Codex introduction to Claude, project findings, implementation plan, completed changes, checks, and remaining visual-verification note.
+  - Added render-only course polish in `src/Hole.tsx`: fairway mowing overlays, green collar/contour rings, cup lip, bunker lips/highlights, and a tee-box detail layer.
+  - Rebuilt `src/Tree.tsx` from simple cone trees into tapered trunks with clustered rounded canopy masses.
+  - Improved `src/Flagstick.tsx` with a shaped pennant, top cap, and pole detail.
+  - Replaced the plain ball in `src/App.tsx` with a grouped golf ball and visible dimples while preserving the same radius/position behavior.
+  - `npm run build` passes with the existing Vite large chunk warning. `node --check server.mjs` passes.
+  - Attempted a local Vite visual check; dev server started on `http://localhost:5174/`, but sandbox `curl` could not connect to the IPv6-only listener and the in-app browser tool was not exposed. Next visual pass should open the app in a browser and inspect the new turf/bunker/ball details for any z-fighting or over-bright overlays.
+- Fairway lie edge fix:
+  - Fixed cases where balls visually on the fairway could be classified as rough by adding a small fairway-zone margin in `pointInFairwayZone`.
+  - Circle and rectangle fairway checks are now inclusive and use a 0.9m forgiveness margin to account for ball radius, camera perspective, and antialiased fairway edges.
+  - `npm run build` and `node --check server.mjs` pass with the same existing Vite large chunk warning.
+- Chipping mode:
+  - Added a third phone swing mode for non-putter short-game clubs inside 50m and off the green.
+  - Phone controls now show `CHIP` / `Practice Chip` and the capture prompt says `Chip!` when chip mode is active.
+  - Chipping uses lower motion thresholds than full swing but higher thresholds than putting, with shorter capture timeout and chip-specific settle detection.
+  - Added `finishChip`, which scores contact/tempo, uses softer power mapping around the recommended chip power, greatly reduces curve, and limits push/pull compared with full swings.
+  - Chip result screen is labeled `Chip analysis`; live chips still send normal swing payloads to the host so existing shot physics, lie rules, builds, and club selection continue to apply.
+  - `npm run build` and `node --check server.mjs` pass with the same existing Vite large chunk warning.
+- Fairway lie hardening:
+  - Increased fairway lie forgiveness and centralized it as `FAIRWAY_LIE_MARGIN`.
+  - Rotated rectangular fairways now test both rotation signs so the lie classifier cannot disagree with angled fairway strips that visually read under the ball.
+  - Added fairway connector corridors between nearby consecutive fairway zones so continuous-looking routed fairways do not have invisible rough gaps between their rendered segments.
+  - Bunker, green, and tee checks still run before fairway, so this only changes rough-vs-fairway decisions.
+  - `npm run build` and `node --check server.mjs` pass with the same existing Vite large chunk warning.
+- Putting power spike fix:
+  - Root cause: `finishPutt` was mapping `state.maxAccel` into putt power, so one phone accelerometer spike around 9-10 m/s² could clamp a tiny putt to 100% power.
+  - Putt power now anchors around the host's recommended cup-distance power instead of absolute max acceleration.
+  - The putt effort signal uses 72nd-percentile backstroke/throughstroke acceleration plus backstroke duration, capped at a putting-scale acceleration, so isolated spikes affect feedback more than launch speed.
+  - Added a distance-relative putt power ceiling; short putts can no longer become full-power blasts from one noisy sensor sample.
+  - `npm run build` and `node --check server.mjs` pass with the same existing Vite large chunk warning.
+- Current workspace health after concurrent notes:
+  - Re-ran `npm run build` after noticing newer progress entries beyond the visual collaboration pass; it still passes with the same existing Vite large chunk warning.
+  - Re-ran `node --check server.mjs`; it passes.
+- Player-model planning pass:
+  - Read Claude's updated `collab.md` lighting/health notes and current `Player.tsx`/`App.tsx` player integration.
+  - Added a detailed player-model plan to `collab.md` covering gameplay constraints, procedural human model improvements, club-head alignment, animation sequencing, material integration, verification checks, and when external `.glb`/Blender work would be worthwhile.
+  - No implementation changes made in this pass.
+- Player-model implementation pass:
+  - Rebuilt `src/Player.tsx` as a procedural golfer rig with local helpers for capsule bones, joints, shoes, legs, pelvis, torso, head, arms/hands, and club rendering.
+  - Preserved the `Player` props, local `+X` ball-facing convention, `stateRef` animation inputs, `App.tsx` stance placement, shot timing, physics, aim behavior, and phone-controller pipeline.
+  - Improved address-pose anatomy and detail: tapered limbs, visible knee/ankle landmarks, realistic shoe/sole/cleat hints, pants seams/cuffs, shaped pelvis/torso/chest, collar, neck, smaller detailed head/face/ears, rounded cap with brim underside, glove/hand/finger hints, and more polished club heads.
+  - Added staged swing animation refs for hips, torso, shoulders/arms, head, and trail foot. Full swings now coil/uncoil more like a golf swing; putter swings stay quieter.
+  - `npx tsc --noEmit`, `npm run build`, and `node --check server.mjs` pass. Vite still has the existing large chunk warning.
+  - Existing dev server is listening on port 5173. Browser visual QA is still needed for club-head-to-ball alignment across driver/iron/wedge/putter and follow-through readability.
+- GLB model integration:
+  - Integrated the user-provided `model.glb` into `src/Player.tsx` using existing `@react-three/drei` `useGLTF`; no new dependency required.
+  - Added `src/vite-env.d.ts` so TypeScript accepts Vite asset imports like `../model.glb?url`.
+  - `src/App.tsx` now wraps `<Player />` in `Suspense` for safe async GLB loading.
+  - The imported model is cloned, shadow-enabled, scaled to 0.82, and raised by 0.82 so its Y bounds land on the turf. Material metalness is damped because this GLB has one material for skin/clothes/club.
+  - Because the GLB is unrigged and single-material, it is used as a static golfer shell with a small animated hands/club overlay still driven by the existing `charge`/`swing` state. This preserves gameplay timing but does not provide true body animation or outfit recoloring.
+  - `npx tsc --noEmit`, `npm run build`, and `node --check server.mjs` pass. Build now emits `dist/assets/model-*.glb` and still shows the existing large chunk warning.
+- Mixamo player transform fix:
+  - User screenshot showed the FBX/Mixamo player floating and facing the wrong way after Claude's rigged-player changes.
+  - Changed `FACING_Y` in `src/Player.tsx` from `Math.PI / 2` to `-Math.PI / 2` so this export's visual forward maps to the game's local `+X` ball-facing convention.
+  - Added `rigGroupRef` and per-frame animated bounds grounding after mixer scrubbing; the rig group now offsets by `-box.min.y` so the lowest animated foot stays on turf instead of relying on bind-pose bounds.
+  - Captured `mixamorigHips` rest position and resets hips `x/z` after each mixer update to stop Mixamo root motion from sliding the golfer away from the ball while preserving vertical pose motion.
+  - `npx tsc --noEmit`, `npm run build`, and `node --check server.mjs` pass. If a follow-up screenshot shows the model is 180° off instead of fixed, toggle `FACING_Y` back to `Math.PI / 2`.
+- Mixamo player transform fix v2:
+  - Follow-up screenshot still showed the player facing the wrong way and hovering.
+  - Changed `FACING_Y` in `src/Player.tsx` to `Math.PI`, because the `-Math.PI / 2` correction still left the exported Mixamo stance on the wrong side relative to the game's local `+X` ball-facing convention.
+  - Reset the full `mixamorigHips.position` to its captured rest pose after animation scrubbing, instead of only resetting `x/z`; this blocks baked Mixamo vertical root/hips translation from lifting the golfer.
+  - Kept the post-animation Box3 foot-grounding pass so the lowest animated foot is corrected to turf after the clip pose is applied.
+  - `npx tsc --noEmit`, `npm run build`, and `node --check server.mjs` pass. Existing Vite large chunk warning remains.
+- Visible club/address cleanup:
+  - Added `RenderedClub` in `src/Player.tsx` so the Mixamo golfer no longer has empty hands before the shot.
+  - The visual-only club includes a metallic shaft, black grip, small hand overlays on the grip, and selected-club head shapes for putter, woods/hybrid, irons, and wedges.
+  - The club uses the existing local `+X` ball-facing convention and existing `charge`/`swing` state; it returns to the address/ball position at `CLUB_IMPACT_FRAC = 0.42`, matching the host shot-impact timing.
+  - This does not change shot physics, phone input, aim, stance placement, or collision.
+  - `npx tsc --noEmit`, `npm run build`, and `node --check server.mjs` pass. Existing Vite large chunk warning remains.
