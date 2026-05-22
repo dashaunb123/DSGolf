@@ -1767,19 +1767,91 @@ function recommendedPowerForShot(
 }
 
 async function apiPost<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(path, {
+  const url = apiUrl(path);
+  const res = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(await res.text());
-  return res.json();
+  return readApiJson<T>(res, url);
+}
+
+function getAppRouteBase() {
+  const pathname = window.location.pathname;
+  if (pathname === "/dsgolf" || pathname.startsWith("/dsgolf/")) return "/dsgolf/";
+  if (pathname.startsWith("/game-repos/dsgolf/dist/")) return "/game-repos/dsgolf/dist/";
+  return "/";
+}
+
+function isPrivateIpv4Hostname(hostname: string) {
+  const match = hostname.trim().match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (!match) return false;
+  const parts = match.slice(1).map((part) => Number(part));
+  if (parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return false;
+  if (parts[0] === 10) return true;
+  if (parts[0] === 192 && parts[1] === 168) return true;
+  return parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31;
+}
+
+function isLocalApiHostname(hostname: string) {
+  const normalized = hostname.trim().toLowerCase();
+  if (!normalized) return false;
+  if (["localhost", "127.0.0.1", "::1"].includes(normalized)) return true;
+  if (normalized.endsWith(".local")) return true;
+  return isPrivateIpv4Hostname(normalized);
+}
+
+function getConfiguredApiOrigin() {
+  const config = (window as typeof window & {
+    __PLAYRBB_FRONTEND_CONFIG__?: { apiUrl?: string };
+  }).__PLAYRBB_FRONTEND_CONFIG__;
+  const configured = String(config?.apiUrl || "https://api.playrbb.com").trim().replace(/\/+$/, "");
+  return configured;
+}
+
+const APP_ROUTE_BASE = getAppRouteBase();
+const API_ROUTE_BASE = APP_ROUTE_BASE === "/" ? "/api" : "/dsgolf-api";
+const API_ORIGIN = isLocalApiHostname(window.location.hostname) ? "" : getConfiguredApiOrigin();
+
+function apiUrl(path: string) {
+  const raw = path.startsWith("/api/") ? path.slice(4) : path;
+  const normalized = raw.startsWith("/") ? raw : `/${raw}`;
+  return `${API_ORIGIN}${API_ROUTE_BASE}${normalized}`;
+}
+
+async function readApiJson<T>(res: Response, url: string): Promise<T> {
+  const text = await res.text();
+  let payload: unknown = null;
+  if (text) {
+    try {
+      payload = JSON.parse(text);
+    } catch (_error) {
+      const hint = text.trim().startsWith("<")
+        ? "The LAN API returned HTML instead of JSON. Make sure the API server is running and this build is using the API origin, not the static launcher origin."
+        : "The LAN API returned invalid JSON.";
+      throw new Error(`${hint} (${res.status} ${res.statusText || "response"} from ${url})`);
+    }
+  }
+  if (!res.ok) {
+    const message = payload && typeof payload === "object" && "error" in payload
+      ? String((payload as { error?: unknown }).error)
+      : text || `${res.status} ${res.statusText || "request failed"}`;
+    throw new Error(message);
+  }
+  return payload as T;
+}
+
+function controllerJoinUrl(code: string) {
+  const url = new URL(APP_ROUTE_BASE, window.location.origin);
+  url.searchParams.set("controller", "1");
+  url.searchParams.set("code", code);
+  return url.toString();
 }
 
 async function createSession() {
-  const res = await fetch("/api/session");
-  if (!res.ok) throw new Error("LAN server is not running. Use `npm run lan`.");
-  return res.json() as Promise<{ clientId: string }>;
+  const url = apiUrl("/api/session");
+  const res = await fetch(url);
+  return readApiJson<{ clientId: string }>(res, url);
 }
 
 type GameProps = {
@@ -2998,9 +3070,9 @@ function GolfGame({
   useEffect(() => {
     if (!hostInfo) return;
     const events = new EventSource(
-      `/api/events?code=${encodeURIComponent(hostInfo.code)}&clientId=${encodeURIComponent(
+      apiUrl(`/api/events?code=${encodeURIComponent(hostInfo.code)}&clientId=${encodeURIComponent(
         hostInfo.clientId,
-      )}`,
+      )}`),
     );
     events.addEventListener("controller_joined", () => {
       flashMessage("Controller connected", 1400);
@@ -4004,7 +4076,7 @@ export function App({ onExitToMenu }: { onExitToMenu?: () => void } = {}) {
         "/api/lobbies/create",
         { clientId: session.clientId },
       );
-      const joinUrl = `${window.location.origin}/?controller=1&code=${created.lobby.code}`;
+      const joinUrl = controllerJoinUrl(created.lobby.code);
       setHostInfo({
         code: created.lobby.code,
         clientId: session.clientId,
@@ -4098,9 +4170,9 @@ function LobbyScreen({
   // Subscribe to lobby events so phone joiners appear live.
   useEffect(() => {
     const events = new EventSource(
-      `/api/events?code=${encodeURIComponent(hostInfo.code)}&clientId=${encodeURIComponent(
+      apiUrl(`/api/events?code=${encodeURIComponent(hostInfo.code)}&clientId=${encodeURIComponent(
         hostInfo.clientId,
-      )}`,
+      )}`),
     );
     events.addEventListener("players_changed", (event) => {
       const payload = JSON.parse((event as MessageEvent).data) as {
@@ -5197,9 +5269,9 @@ function PhoneController({ onBack }: { onBack: () => void }) {
   useEffect(() => {
     if (!joined || !clientId) return;
     const events = new EventSource(
-      `/api/events?code=${encodeURIComponent(code)}&clientId=${encodeURIComponent(
+      apiUrl(`/api/events?code=${encodeURIComponent(code)}&clientId=${encodeURIComponent(
         clientId,
-      )}`,
+      )}`),
     );
     events.addEventListener("host_state", (event) => {
       const payload = JSON.parse((event as MessageEvent).data) as {
