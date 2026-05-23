@@ -28,6 +28,17 @@ function json(res, status, body) {
   res.end(JSON.stringify(body));
 }
 
+function publicOrigin(req) {
+  const configured = process.env.PUBLIC_BASE_URL || process.env.PUBLIC_URL || process.env.APP_URL;
+  if (configured) return configured.replace(/\/+$/, "");
+
+  const forwardedProto = String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim();
+  const forwardedHost = String(req.headers["x-forwarded-host"] || "").split(",")[0].trim();
+  const proto = forwardedProto || (USE_HTTPS ? "https" : "http");
+  const host = forwardedHost || req.headers.host || `localhost:${PORT}`;
+  return `${proto}://${host}`;
+}
+
 async function readJson(req) {
   let raw = "";
   for await (const chunk of req) raw += chunk;
@@ -92,7 +103,7 @@ async function serveStatic(req, res) {
     res.end(body);
   } catch {
     res.writeHead(404);
-    res.end("Not found. Run `npm run build` before `npm run lan`.");
+    res.end("Not found. Run `npm run build` before starting the server.");
   }
 }
 
@@ -106,14 +117,14 @@ function ensureSelfSignedCert() {
   const sanLine = sans.join(",");
   const forceRegen = process.env.REGEN_CERT === "1";
 
-  // Reuse existing cert only if it covers every current LAN IP via SAN.
+  // Reuse existing cert only if it covers every current local-network IP via SAN.
   if (!forceRegen && existsSync(keyPath) && existsSync(certPath)) {
     try {
       const info = execSync(`openssl x509 -in "${certPath}" -noout -text`).toString();
       const hasSan = info.includes("Subject Alternative Name");
       const allCovered = addrs.every((a) => info.includes(`IP Address:${a}`));
       if (hasSan && allCovered) return { keyPath, certPath };
-      console.log("Existing cert missing current LAN IP(s) in SAN — regenerating.");
+      console.log("Existing cert missing current local-network IP(s) in SAN - regenerating.");
     } catch {
       console.log("Could not inspect existing cert — regenerating.");
     }
@@ -132,7 +143,7 @@ function ensureSelfSignedCert() {
       "prompt = no",
       "",
       "[dn]",
-      "CN = dsgolf-lan",
+      "CN = dsgolf-network",
       "",
       "[v3_req]",
       `subjectAltName = ${sanLine}`,
@@ -166,6 +177,14 @@ const handler = async (req, res) => {
 
   if (req.method === "GET" && url.pathname === "/api/session") {
     return json(res, 200, { clientId: id("client") });
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/config") {
+    const origin = publicOrigin(req);
+    return json(res, 200, {
+      publicBaseUrl: origin,
+      networkMode: origin.includes("localhost") || origin.includes("127.0.0.1") ? "local" : "online",
+    });
   }
 
   if (req.method === "POST" && url.pathname === "/api/lobbies/create") {
@@ -263,7 +282,11 @@ const handler = async (req, res) => {
       sendEvent(res, "host_state", { state: lobby.state });
     }
     sendEvent(res, "players_changed", { players: Array.from(lobby.players.values()) });
+    const heartbeat = setInterval(() => {
+      sendEvent(res, "ping", { t: Date.now() });
+    }, 15000);
     req.on("close", () => {
+      clearInterval(heartbeat);
       // Only drop the entry if it still refers to *this* response.
       // A reconnect from the same clientId (e.g. host moving from lobby
       // screen to game screen) will have already replaced lobby.clients[id].
@@ -289,12 +312,13 @@ const handler = async (req, res) => {
 
 const httpServer = createHttpServer(handler);
 httpServer.listen(PORT, "0.0.0.0", () => {
-  console.log(`DSGolf LAN server (HTTP)  on http://localhost:${PORT}`);
+  console.log(`DSGolf network server (HTTP)  on http://localhost:${PORT}`);
   if (!USE_HTTPS) {
     for (const addr of localAddresses()) {
       console.log(`Phone/controller URL: http://${addr}:${PORT}/?controller=1`);
     }
-    console.log("Note: iOS requires HTTPS for motion sensors. Re-run with `HTTPS=1 npm run lan`.");
+    console.log("For friends on cellular, deploy this server to a public HTTPS host and set PUBLIC_BASE_URL.");
+    console.log("Local iOS motion sensors need HTTPS. Re-run with `HTTPS=1 npm run network`.");
   }
 });
 
@@ -305,10 +329,10 @@ if (USE_HTTPS) {
     handler,
   );
   httpsServer.listen(HTTPS_PORT, "0.0.0.0", () => {
-    console.log(`DSGolf LAN server (HTTPS) on https://localhost:${HTTPS_PORT}`);
+    console.log(`DSGolf network server (HTTPS) on https://localhost:${HTTPS_PORT}`);
     for (const addr of localAddresses()) {
       console.log(`Phone/controller URL: https://${addr}:${HTTPS_PORT}/?controller=1`);
     }
-    console.log("Accept the self-signed cert warning on the phone the first time.");
+    console.log("Local HTTPS uses a self-signed cert. Public deployments should use the host's normal HTTPS.");
   });
 }

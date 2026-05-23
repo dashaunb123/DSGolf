@@ -43,6 +43,11 @@ type HostInfo = {
   joinUrl: string;
 };
 
+type ServerConfig = {
+  publicBaseUrl: string;
+  networkMode: "local" | "online";
+};
+
 export type GolfPlayer = {
   id: string;
   name: string;
@@ -1778,8 +1783,24 @@ async function apiPost<T>(path: string, body: unknown): Promise<T> {
 
 async function createSession() {
   const res = await fetch("/api/session");
-  if (!res.ok) throw new Error("LAN server is not running. Use `npm run lan`.");
+  if (!res.ok) throw new Error("Network server is not running. Use `npm run network` locally, or deploy the server for cellular play.");
   return res.json() as Promise<{ clientId: string }>;
+}
+
+async function getServerConfig() {
+  const res = await fetch("/api/config");
+  if (!res.ok) {
+    return {
+      publicBaseUrl: window.location.origin,
+      networkMode: window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1" ? "local" : "online",
+    } satisfies ServerConfig;
+  }
+  const config = (await res.json()) as Partial<ServerConfig>;
+  const publicBaseUrl = (config.publicBaseUrl || window.location.origin).replace(/\/+$/, "");
+  return {
+    publicBaseUrl,
+    networkMode: config.networkMode === "local" ? "local" : "online",
+  } satisfies ServerConfig;
 }
 
 type GameProps = {
@@ -4000,11 +4021,12 @@ export function App({ onExitToMenu }: { onExitToMenu?: () => void } = {}) {
     setError("");
     try {
       const session = await createSession();
+      const config = await getServerConfig();
       const created = await apiPost<{ lobby: { code: string } }>(
         "/api/lobbies/create",
         { clientId: session.clientId },
       );
-      const joinUrl = `${window.location.origin}/?controller=1&code=${created.lobby.code}`;
+      const joinUrl = `${config.publicBaseUrl}/?controller=1&code=${created.lobby.code}`;
       setHostInfo({
         code: created.lobby.code,
         clientId: session.clientId,
@@ -4151,6 +4173,11 @@ function LobbyScreen({
           <div style={{ fontSize: 12, opacity: 0.8, marginTop: 4 }}>
             Phones join at <b>{hostInfo.joinUrl}</b>
           </div>
+          {hostInfo.joinUrl.includes("localhost") || hostInfo.joinUrl.includes("127.0.0.1") ? (
+            <div style={{ fontSize: 12, opacity: 0.7, marginTop: 6 }}>
+              Localhost links only work on this computer. Deploy the server to public HTTPS for friends on cellular.
+            </div>
+          ) : null}
         </div>
 
         <div style={{ marginTop: 12 }}>
@@ -4944,14 +4971,14 @@ function MenuScreen({
       <div style={menuStyles.panel}>
         <div style={{ fontSize: 34, fontWeight: 900, marginBottom: 6 }}>DSGolf</div>
         <div style={{ opacity: 0.78, marginBottom: 24 }}>
-          Host the course on this screen, then connect a phone on the same Wi-Fi as a swing controller.
+          Host the course on this screen, then friends can join from phones with the game code.
         </div>
-        <button style={menuStyles.primaryButton} onClick={onHost}>Host LAN Game</button>
+        <button style={menuStyles.primaryButton} onClick={onHost}>Host Online Game</button>
         <button style={menuStyles.button} onClick={onJoin}>Join From Phone</button>
         <button style={menuStyles.button} onClick={onSolo}>Play Solo</button>
         {error && <div style={menuStyles.error}>{error}</div>}
         <div style={menuStyles.note}>
-          LAN hosting uses `npm run lan`. For iPhone motion control, run `HTTPS=1 npm run lan` (iOS requires HTTPS for sensor permission). Fallback power is always available.
+          Cellular play needs a public HTTPS server. Locally, use `npm run network`; for iPhone motion testing on local Wi-Fi use `HTTPS=1 npm run network`.
         </div>
       </div>
     </div>
@@ -5420,7 +5447,7 @@ function PhoneController({ onBack }: { onBack: () => void }) {
     }
     if (needsExplicitPermission && !isSecure) {
       setMotionError(
-        "iOS needs HTTPS for motion. On the host run: HTTPS=1 npm run lan, then reopen the printed https:// URL.",
+        "iOS needs HTTPS for motion. Use the public https:// game URL, or run HTTPS=1 npm run network for local testing.",
       );
       return;
     }

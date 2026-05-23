@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "lan": "npm run build && node server.mjs",
+    "start": "node server.mjs",
+    "network": "npm run build && node server.mjs",
+    "lan": "npm run network",
     "play": "node scripts/play.mjs",
     "preview": "vite preview"
   },

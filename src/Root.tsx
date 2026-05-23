@@ -51,7 +51,7 @@ function Menu({ onPick }: { onPick: (g: GameId) => void }) {
       <div style={{ display: "flex", gap: 28, flexWrap: "wrap", justifyContent: "center" }}>
         <GameCard
           title="Golf"
-          subtitle="18 holes · solo or LAN multiplayer"
+          subtitle="18 holes · solo or online multiplayer"
           accent="#5fd35f"
           art={
             <svg viewBox="0 0 100 100" width="120" height="120">

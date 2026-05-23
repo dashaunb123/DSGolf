@@ -117,6 +117,14 @@ TODO:
   - Offset clears after impact, on reset/hole setup, and when starting a keyboard swing.
   - Fixes the issue where after a left/right path miss the camera could face the cup while the player still appeared aligned to the miss line.
   - `npm run build` passes with the same existing large chunk warning.
+- Online/cellular multiplayer pass:
+  - Kept the existing lobby-code relay design, but made it public-deployment aware for friends on cellular or different Wi-Fi networks.
+  - Added `/api/config` in `server.mjs`; it reports `PUBLIC_BASE_URL`/forwarded host as the join-link origin so deployed hosts show a public HTTPS controller URL instead of a local machine URL.
+  - Added a 15s SSE heartbeat so deployed proxies are less likely to drop idle lobby/controller streams.
+  - Added `npm run network` and `npm start`; kept `npm run lan` as a compatibility alias.
+  - Updated menu/lobby/iOS motion copy from LAN-only wording to online/network wording, including a warning when the generated controller URL is localhost-only.
+  - Expanded `README.md` with local and public deployment instructions, including `PUBLIC_BASE_URL` and HTTPS notes.
+  - `npm run build` and `node --check server.mjs` pass. Build still has the existing large-chunk warning.
 - Creative par-5 pass:
   - Added Hole 3 as a 545-yard par 5.
   - Extended layout data to support multiple fairway zones and multiple elliptical bunkers instead of only a single straight fairway and one bunker.
