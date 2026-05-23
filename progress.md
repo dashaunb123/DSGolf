@@ -226,6 +226,19 @@ TODO:
   - `npm run build` passes with the same existing large chunk warning.
 - Player builds pass:
   - Added player builds with ratings: Default (75/65/65), McRoar (98/86/88), Big Bryce (100/82/80), Chef Scott (92/97/98), The Tiger (97/100/100), and X Shuffle (89/94/95).
+- Parent arcade integration pass:
+  - Made the Vite build use relative asset URLs (`base: "./"`) so DSGolf can run both standalone at `/` and inside the Dashaun Studios launcher at `/dsgolf/`.
+  - Added route-aware API helpers in `src/App.tsx`: standalone LAN keeps using `/api/*`, while the launcher-mounted app uses `/dsgolf-api/*`.
+  - Host-created phone join URLs now preserve the mounted `/dsgolf/` path instead of always pointing phones at the site root.
+  - Verified `npm run build` passes after installing submodule dependencies; Vite still reports only the existing large chunk warning.
+- Static deploy fix:
+  - Stopped ignoring `dist/` so the built Vite app can be committed for hosts that do not run the submodule build before applying `_redirects`.
+  - Route detection now also supports direct `/game-repos/dsgolf/dist/` fallback URLs while still using `/dsgolf-api/*` for LAN/controller calls.
+- LAN JSON/API-origin fix:
+  - Production/static launcher builds now call `https://api.playrbb.com/dsgolf-api/*` for LAN host/controller requests instead of trying to parse HTML from the static launcher origin.
+  - Localhost, LAN IPs, and `.local` hosts still use same-origin `/dsgolf-api/*` for local testing and standalone LAN play.
+  - Replaced raw `res.json()` calls with response-text parsing that reports when the API returned HTML instead of JSON.
+  - Rebuilt `dist/`; verified local `/dsgolf-api/session`, `/lobbies/create`, and `/lobbies/join` return JSON.
   - Phone join flow now asks for build before name; phone lobby allows changing build before the host starts.
   - Host lobby local players can also select builds, and phone-selected build IDs persist through `server.mjs` lobby join/update payloads.
   - Power modifies non-putter effective carry/stock yardage, including auto club selection, recommended power, trajectory preview, and actual shot velocity.
