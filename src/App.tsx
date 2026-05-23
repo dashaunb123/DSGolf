@@ -1816,11 +1816,13 @@ function getConfiguredApiOrigin() {
 
 const APP_ROUTE_BASE = getAppRouteBase();
 const API_ROUTE_BASE = APP_ROUTE_BASE === "/" ? "/api" : "/dsgolf-api";
-// DSGolf's matchmaking endpoints are always same-origin (served by the same
-// node process that serves the bundle — server.mjs standalone, or server.js
-// under the arcade at /dsgolf-api). Do not route through api.playrbb.com,
-// which is the basketball matchmaking service and returns 403 for these paths.
-const API_ORIGIN = "";
+// Same-origin for local dev (server.js / server.mjs serves both bundle + API)
+// and for any private/loopback host. On a public hostname the bundle is served
+// by a static host (Cloudflare Pages) that cannot run the matchmaking API, so
+// route DSGolf API calls to the configured Node API origin
+// (__PLAYRBB_FRONTEND_CONFIG__.apiUrl, defaults to api.playrbb.com). That host
+// must run a server.js that includes the /dsgolf-api/* handler.
+const API_ORIGIN = isLocalApiHostname(window.location.hostname) ? "" : getConfiguredApiOrigin();
 
 function apiUrl(path: string) {
   const raw = path.startsWith("/api/") ? path.slice(4) : path;
