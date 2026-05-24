@@ -6185,7 +6185,7 @@ function PhoneController({ onBack }: { onBack: () => void }) {
             value={code}
             onChange={(e) => setCode(e.target.value.toUpperCase())}
             placeholder="CODE"
-            maxLength={4}
+            maxLength={6}
             style={menuStyles.input}
           />
           <div style={{ marginTop: 8, marginBottom: 4, opacity: 0.7, fontSize: 12, letterSpacing: 1 }}>YOUR NAME</div>
