@@ -1866,7 +1866,7 @@ async function createSession() {
 }
 
 async function getServerConfig() {
-  const res = await fetch("/api/config");
+  const res = await fetch(apiUrl("/api/config"));
   if (!res.ok) {
     return {
       publicBaseUrl: window.location.origin,
