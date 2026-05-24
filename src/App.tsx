@@ -65,10 +65,12 @@ type PowerBalanceMode = "realistic" | "relaxed" | "compact";
 
 type GameSettings = {
   powerBalance: PowerBalanceMode;
+  realisticSwing: boolean;
 };
 
 const DEFAULT_GAME_SETTINGS: GameSettings = {
   powerBalance: "realistic",
+  realisticSwing: true,
 };
 
 const POWER_BALANCE_OPTIONS: Array<{
@@ -130,6 +132,10 @@ function normalizePowerBalance(value: unknown): PowerBalanceMode {
   return POWER_BALANCE_OPTIONS.some((option) => option.value === value)
     ? (value as PowerBalanceMode)
     : "realistic";
+}
+
+function normalizeRealisticSwing(value: unknown) {
+  return value !== false;
 }
 
 function powerBalanceFullPowerAt(mode: PowerBalanceMode) {
@@ -298,6 +304,7 @@ type PhoneSyncState = {
   currentPlayerName?: string;
   currentPlayerBuildId?: PlayerBuildId;
   powerBalance?: PowerBalanceMode;
+  realisticSwing?: boolean;
   isPutter?: boolean;
   distanceMeters?: number;
   surface?: Surface;
@@ -2661,6 +2668,7 @@ function GolfGame({
       currentPlayerName: player?.name,
       currentPlayerBuildId: normalizeBuildId(player?.buildId),
       powerBalance: normalizePowerBalance(gameSettings.powerBalance),
+      realisticSwing: normalizeRealisticSwing(gameSettings.realisticSwing),
       isPutter: !!club.putter,
       distanceMeters,
       surface,
@@ -3100,7 +3108,7 @@ function GolfGame({
   useEffect(() => {
     if (!hostInfo) return;
     publishPhoneState();
-  }, [hostInfo, gameSettings.powerBalance]);
+  }, [hostInfo, gameSettings.powerBalance, gameSettings.realisticSwing]);
 
   useEffect(() => {
     if (!hostInfo) return;
@@ -3407,6 +3415,13 @@ function HostBadge({
         <PowerBalanceSelector
           value={gameSettings.powerBalance}
           onPick={(powerBalance) => onGameSettingsChange?.({ powerBalance })}
+          compact
+        />
+      </div>
+      <div style={{ marginTop: 6 }}>
+        <RealisticSwingToggle
+          value={gameSettings.realisticSwing}
+          onChange={(realisticSwing) => onGameSettingsChange?.({ realisticSwing })}
           compact
         />
       </div>
@@ -4273,6 +4288,12 @@ function LobbyScreen({
             onPick={(powerBalance) => onGameSettingsChange({ powerBalance })}
           />
         </div>
+        <div style={{ marginTop: 10 }}>
+          <RealisticSwingToggle
+            value={gameSettings.realisticSwing}
+            onChange={(realisticSwing) => onGameSettingsChange({ realisticSwing })}
+          />
+        </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 12 }}>
           {players.length === 0 && (
@@ -4860,6 +4881,74 @@ function PowerBalanceSelector({
   );
 }
 
+function RealisticSwingToggle({
+  value,
+  onChange,
+  compact = false,
+}: {
+  value: boolean;
+  onChange: (value: boolean) => void;
+  compact?: boolean;
+}) {
+  const enabled = normalizeRealisticSwing(value);
+  return (
+    <label
+      style={{
+        display: "grid",
+        gridTemplateColumns: "minmax(0, 1fr) auto",
+        alignItems: "center",
+        gap: compact ? 8 : 12,
+        padding: compact ? 0 : 12,
+        borderRadius: compact ? 0 : 10,
+        background: compact ? "transparent" : "rgba(255,255,255,0.06)",
+        border: compact ? 0 : "1px solid rgba(255,255,255,0.14)",
+        cursor: "pointer",
+      }}
+    >
+      <span style={{ minWidth: 0 }}>
+        <span style={{ display: "block", fontSize: compact ? 10 : 12, opacity: 0.72, letterSpacing: 1.2, fontWeight: 850 }}>
+          REALISTIC SWING
+        </span>
+        {!compact && (
+          <span style={{ display: "block", fontSize: 11, opacity: 0.58, marginTop: 3 }}>
+            Caps fake swings; turn off for uncapped arcade power.
+          </span>
+        )}
+      </span>
+      <span
+        style={{
+          width: compact ? 42 : 52,
+          height: compact ? 24 : 28,
+          borderRadius: 999,
+          padding: 3,
+          boxSizing: "border-box",
+          background: enabled ? "#63d471" : "#263545",
+          border: enabled ? "1px solid #63d471" : "1px solid rgba(255,255,255,0.22)",
+          transition: "background 140ms ease, border 140ms ease",
+        }}
+      >
+        <input
+          type="checkbox"
+          checked={enabled}
+          onChange={(event) => onChange(event.currentTarget.checked)}
+          style={{ position: "absolute", opacity: 0, pointerEvents: "none" }}
+        />
+        <span
+          style={{
+            display: "block",
+            width: compact ? 18 : 22,
+            height: compact ? 18 : 22,
+            borderRadius: 999,
+            background: enabled ? "#0d1b16" : "rgba(255,255,255,0.84)",
+            transform: `translateX(${enabled ? (compact ? 18 : 24) : 0}px)`,
+            transition: "transform 140ms ease",
+          }}
+        />
+      </span>
+    </label>
+  );
+}
+
 function BuildSelector({
   value,
   onPick,
@@ -5123,6 +5212,7 @@ function PhoneController({ onBack }: { onBack: () => void }) {
     return {
       clubIdx,
       powerBalance: "realistic",
+      realisticSwing: true,
       isPutter: !!club.putter,
       distanceMeters,
       surface,
@@ -5324,6 +5414,7 @@ function PhoneController({ onBack }: { onBack: () => void }) {
           ...prev,
           ...payload.state,
           powerBalance: normalizePowerBalance(payload.state?.powerBalance),
+          realisticSwing: normalizeRealisticSwing(payload.state?.realisticSwing),
         }));
       }
       const next = payload.state?.clubIdx;
@@ -5629,12 +5720,13 @@ function PhoneController({ onBack }: { onBack: () => void }) {
           normalizePowerBalance(phoneSyncRef.current.powerBalance),
         )
       : null;
+    const realisticSwing = normalizeRealisticSwing(phoneSyncRef.current.realisticSwing);
     const wobbleSeverity =
       realMotion && state.pathSamples >= 4
         ? THREE.MathUtils.clamp((wobbleRatio - 0.22) / 0.75, 0, 1)
         : 0;
     const pathQuality = realMotion
-      ? THREE.MathUtils.clamp((1 - wobbleSeverity * 0.7) * (realism?.qualityCap ?? 1), 0.08, 1)
+      ? THREE.MathUtils.clamp((1 - wobbleSeverity * 0.7) * (realisticSwing ? realism?.qualityCap ?? 1 : 1), 0.08, 1)
       : 1;
 
     // ── Shape: signed curve of the swing in the horizontal plane ──
@@ -5652,7 +5744,7 @@ function PhoneController({ onBack }: { onBack: () => void }) {
     // ── Path miss: launch direction is now measured against the calibrated
     // target line, not against the swing's self-selected PCA axis.
     const realismMiss =
-      realMotion && realism && realism.score < 0.62
+      realMotion && realisticSwing && realism && realism.score < 0.62
         ? Math.sign(targetMetrics.pathAngle || targetMetrics.sideBias || 1) * (0.62 - realism.score) * 0.14
         : 0;
     const pathError = Math.abs(targetMetrics.pathAngle + realismMiss) > 0.025
@@ -5665,10 +5757,10 @@ function PhoneController({ onBack }: { onBack: () => void }) {
     let qualityLabel = "Pured it";
     if (wobbleSeverity > 0.55) qualityLabel = "Mis-strike";
     else if (wobbleSeverity > 0.28) qualityLabel = "Loose contact";
-    if (realism && realism.score < 0.45) qualityLabel = "Bad contact";
-    else if (realism && realism.score < 0.62) qualityLabel = "Weak contact";
+    if (realisticSwing && realism && realism.score < 0.45) qualityLabel = "Bad contact";
+    else if (realisticSwing && realism && realism.score < 0.62) qualityLabel = "Weak contact";
     const label = realMotion
-      ? realism && realism.score < 0.7
+      ? realisticSwing && realism && realism.score < 0.7
         ? `${realism.label} · ${qualityLabel}`
         : `${shapeLabel} · ${qualityLabel}`
       : "Fallback swing";
@@ -5687,7 +5779,9 @@ function PhoneController({ onBack }: { onBack: () => void }) {
     );
     const rawPower = THREE.MathUtils.clamp(0.08 + balancedEffort * 0.92, 0.08, 1);
     const power = realMotion
-      ? Math.min(rawPower, realism?.powerCap ?? 1)
+      ? realisticSwing
+        ? Math.min(rawPower, realism?.powerCap ?? 1)
+        : rawPower
       : fallbackPower;
 
     // ── Build 2D points for the new result screen views ──
@@ -6560,6 +6654,7 @@ function PhoneController({ onBack }: { onBack: () => void }) {
   const activePowerBalanceLabel =
     POWER_BALANCE_OPTIONS.find((option) => option.value === activePowerBalance)?.label ?? "Realistic";
   const canTakeLiveShot = !currentPlayerId || currentPlayerId === clientId;
+  const realisticSwingEnabled = normalizeRealisticSwing(phoneSync.realisticSwing);
 
   return (
     <div style={controllerStyles.shell}>
@@ -6698,7 +6793,7 @@ function PhoneController({ onBack }: { onBack: () => void }) {
             </button>
           ) : (
             <div style={controllerStyles.diag}>
-              Motion: {liveAccel.toFixed(1)} m/s² · peak {swingRef.current.maxAccel.toFixed(1)} · {activePowerBalanceLabel}
+              Motion: {liveAccel.toFixed(1)} m/s² · peak {swingRef.current.maxAccel.toFixed(1)} · {activePowerBalanceLabel} · {realisticSwingEnabled ? "Realistic" : "Arcade"}
             </div>
           )}
           {!motionGranted && (

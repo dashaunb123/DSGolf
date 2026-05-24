@@ -125,6 +125,11 @@ TODO:
   - Updated menu/lobby/iOS motion copy from LAN-only wording to online/network wording, including a warning when the generated controller URL is localhost-only.
   - Expanded `README.md` with local and public deployment instructions, including `PUBLIC_BASE_URL` and HTTPS notes.
   - `npm run build` and `node --check server.mjs` pass. Build still has the existing large-chunk warning.
+- Realistic swing setting pass:
+  - Added `gameSettings.realisticSwing` with a host/lobby toggle and phone sync.
+  - When Realistic Swing is off, real full-swing phone shots use uncapped `rawPower` instead of `Math.min(rawPower, realism.powerCap)`, and realism-only quality/path penalties are skipped.
+  - Phone diagnostics now show whether the host is in Realistic or Arcade swing mode.
+  - `npm run build` and `npx tsc --noEmit` pass. Build still has the existing large-chunk warning.
 - Creative par-5 pass:
   - Added Hole 3 as a 545-yard par 5.
   - Extended layout data to support multiple fairway zones and multiple elliptical bunkers instead of only a single straight fairway and one bunker.
