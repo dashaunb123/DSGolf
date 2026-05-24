@@ -838,7 +838,7 @@ function computeSwingRealism(
     // power-balance mode free to shape the whole range. Only fake/degenerate
     // motion — a slam, a flick — is power-capped. Strike quality and shot
     // shape are still graded by score separately, via qualityCap below.
-    powerCap: THREE.MathUtils.clamp((score - 0.1) / 0.4, 0.05, 1),
+    powerCap: THREE.MathUtils.clamp((score - 0.1) / 0.4, 0.22, 1),
     qualityCap:
       score >= 0.78 ? 1 : THREE.MathUtils.clamp(0.16 + Math.pow(score, 1.1) * 0.95, 0.16, 0.96),
   });
@@ -2610,6 +2610,8 @@ function GolfGame({
   const currentBuild = getPlayerBuild(currentPlayer);
   const currentPlayerRef = useRef(currentPlayer);
   currentPlayerRef.current = currentPlayer;
+  const currentPlayerIdRef = useRef(currentPlayer?.id ?? "");
+  currentPlayerIdRef.current = currentPlayer?.id ?? "";
 
   // If the players prop changes shape (e.g. mid-game add), keep scorecards in sync.
   useEffect(() => {
@@ -2748,7 +2750,13 @@ function GolfGame({
     pendingShotRef.current = true;
   };
 
-  const handleControllerAction = (action: ControllerAction) => {
+  const handleControllerAction = (action: ControllerAction, clientId = "") => {
+    const activePlayerId = currentPlayerIdRef.current;
+    if (clientId && activePlayerId && clientId !== activePlayerId) {
+      const activePlayer = currentPlayerRef.current;
+      if (activePlayer) flashMessage(`${activePlayer.name} is up`, 1000);
+      return;
+    }
     if (action.type === "aim") nudgeAim(action.delta);
     else if (action.type === "club") selectClub(action.index);
     else if (action.type === "autoClub") autoPickClub();
@@ -3107,9 +3115,10 @@ function GolfGame({
     });
     events.addEventListener("controller_action", (event) => {
       const payload = JSON.parse((event as MessageEvent).data) as {
+        clientId?: string;
         action: ControllerAction;
       };
-      handleControllerAction(payload.action);
+      handleControllerAction(payload.action, payload.clientId ?? "");
     });
     events.onerror = () => {
       flashMessage("Controller connection lost", 1600);
@@ -5790,6 +5799,10 @@ function PhoneController({ onBack }: { onBack: () => void }) {
 
   const startSwing = (mode: "practice" | "live" = "live") => {
     if (!joined || swinging) return;
+    if (mode === "live" && currentPlayerId && currentPlayerId !== clientId) {
+      setStatus(`${currentPlayerName || "Another player"} is up`);
+      return;
+    }
     swingModeRef.current = mode;
     setSwingResult(null);
     if (!motionGranted) {
@@ -5814,6 +5827,10 @@ function PhoneController({ onBack }: { onBack: () => void }) {
 
   const useFallbackSwing = (mode: "practice" | "live" = "live") => {
     if (!joined || swinging) return;
+    if (mode === "live" && currentPlayerId && currentPlayerId !== clientId) {
+      setStatus(`${currentPlayerName || "Another player"} is up`);
+      return;
+    }
     swingModeRef.current = mode;
     setSwingResult(null);
     const putting = !!phoneSyncRef.current.isPutter;
@@ -6542,6 +6559,7 @@ function PhoneController({ onBack }: { onBack: () => void }) {
   const activePowerBalance = normalizePowerBalance(phoneSync.powerBalance);
   const activePowerBalanceLabel =
     POWER_BALANCE_OPTIONS.find((option) => option.value === activePowerBalance)?.label ?? "Realistic";
+  const canTakeLiveShot = !currentPlayerId || currentPlayerId === clientId;
 
   return (
     <div style={controllerStyles.shell}>
@@ -6737,12 +6755,19 @@ function PhoneController({ onBack }: { onBack: () => void }) {
                 background:
                   swinging && swingModeRef.current === "live" ? "#ffb13b" : "#63d471",
                 color: "#0d1b16",
-                opacity: swinging && swingModeRef.current !== "live" ? 0.45 : 1,
+                opacity:
+                  !canTakeLiveShot || (swinging && swingModeRef.current !== "live")
+                    ? 0.45
+                    : 1,
               }}
               onClick={() => startSwing("live")}
-              disabled={swinging}
+              disabled={swinging || !canTakeLiveShot}
             >
-              {swinging && swingModeRef.current === "live" ? captureText : puttingMode ? "PUTT" : chippingMode ? "CHIP" : "SWING"}
+              {!canTakeLiveShot
+                ? "WAIT"
+                : swinging && swingModeRef.current === "live"
+                  ? captureText
+                  : puttingMode ? "PUTT" : chippingMode ? "CHIP" : "SWING"}
             </button>
           </div>
         )}
@@ -6755,10 +6780,14 @@ function PhoneController({ onBack }: { onBack: () => void }) {
               Fallback Practice
             </button>
             <button
-              style={controllerStyles.smallButton}
+              style={{
+                ...controllerStyles.smallButton,
+                opacity: canTakeLiveShot ? 1 : 0.45,
+              }}
               onClick={() => useFallbackSwing("live")}
+              disabled={!canTakeLiveShot}
             >
-              Fallback Shot
+              {canTakeLiveShot ? "Fallback Shot" : "Wait Turn"}
             </button>
           </div>
         )}

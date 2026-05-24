@@ -234,6 +234,11 @@ TODO:
 - Static deploy fix:
   - Stopped ignoring `dist/` so the built Vite app can be committed for hosts that do not run the submodule build before applying `_redirects`.
   - Route detection now also supports direct `/game-repos/dsgolf/dist/` fallback URLs while still using `/dsgolf-api/*` for LAN/controller calls.
+- Multi-player phone swing fix:
+  - Host now ignores controller actions whose `clientId` is not the current active player's id, preventing inactive phones from moving aim/club or firing another player's turn.
+  - Phone controller disables live `SWING` / `PUTT` / fallback shot controls while another player is up and shows `WAIT` / `Wait Turn`.
+  - Full-swing realism power cap floor increased from 5% to 22%, so a low-confidence but accepted real swing no longer produces a nearly motionless 5% shot.
+  - `npm run build` passes and regenerated `dist/assets/index-Bij8S0GB.js`.
 - LAN JSON/API-origin fix:
   - Production/static launcher builds now call `https://api.playrbb.com/dsgolf-api/*` for LAN host/controller requests instead of trying to parse HTML from the static launcher origin.
   - Localhost, LAN IPs, and `.local` hosts still use same-origin `/dsgolf-api/*` for local testing and standalone LAN play.
