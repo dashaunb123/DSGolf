@@ -130,6 +130,11 @@ TODO:
   - When Realistic Swing is off, real full-swing phone shots use uncapped `rawPower` instead of `Math.min(rawPower, realism.powerCap)`, and realism-only quality/path penalties are skipped.
   - Phone diagnostics now show whether the host is in Realistic or Arcade swing mode.
   - `npm run build` and `npx tsc --noEmit` pass. Build still has the existing large-chunk warning.
+- Off-turn motion isolation pass:
+  - Phones now cancel any active capture/ready state as soon as host sync says a different player is up.
+  - Ready, practice, live swing, and fallback shot controls are disabled off-turn so another phone's swing cannot pick up local movement.
+  - Standalone `server.mjs` ignores `/api/lobbies/action` posts from non-active players using the host-published `currentPlayerId`.
+  - `npm run build` and `node --check server.mjs` pass.
 - Creative par-5 pass:
   - Added Hole 3 as a 545-yard par 5.
   - Extended layout data to support multiple fairway zones and multiple elliptical bunkers instead of only a single straight fairway and one bunker.

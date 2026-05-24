@@ -244,8 +244,18 @@ const handler = async (req, res) => {
     const body = await readJson(req);
     const lobby = getLobby(body.code);
     if (!lobby) return json(res, 404, { ok: false, error: "Lobby not found" });
+    const clientId = String(body.clientId || "").trim();
+    if (!clientId || !lobby.players.has(clientId)) {
+      return json(res, 403, { ok: false, error: "Player not in lobby" });
+    }
+    const activePlayerId = typeof lobby.state?.currentPlayerId === "string"
+      ? lobby.state.currentPlayerId
+      : "";
+    if (activePlayerId && clientId !== activePlayerId) {
+      return json(res, 200, { ok: true, ignored: true, reason: "not_your_turn" });
+    }
     broadcast(lobby, "controller_action", {
-      clientId: body.clientId,
+      clientId,
       action: body.action,
     });
     return json(res, 200, { ok: true });

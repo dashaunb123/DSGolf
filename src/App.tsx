@@ -5384,6 +5384,15 @@ function PhoneController({ onBack }: { onBack: () => void }) {
     setStatus("");
   };
 
+  useEffect(() => {
+    if (!currentPlayerId || currentPlayerId === clientId) return;
+    if (swinging || captureRef.current.phase !== "idle" || ready) {
+      cancelAutoSwing();
+      setStatus(`${currentPlayerName || "Another player"} is up`);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentPlayerId, clientId]);
+
   const handleClubPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     clubSwipeRef.current = { x: event.clientX, y: event.clientY };
   };
@@ -5893,7 +5902,7 @@ function PhoneController({ onBack }: { onBack: () => void }) {
 
   const startSwing = (mode: "practice" | "live" = "live") => {
     if (!joined || swinging) return;
-    if (mode === "live" && currentPlayerId && currentPlayerId !== clientId) {
+    if (currentPlayerId && currentPlayerId !== clientId) {
       setStatus(`${currentPlayerName || "Another player"} is up`);
       return;
     }
@@ -5921,7 +5930,7 @@ function PhoneController({ onBack }: { onBack: () => void }) {
 
   const useFallbackSwing = (mode: "practice" | "live" = "live") => {
     if (!joined || swinging) return;
-    if (mode === "live" && currentPlayerId && currentPlayerId !== clientId) {
+    if (currentPlayerId && currentPlayerId !== clientId) {
       setStatus(`${currentPlayerName || "Another player"} is up`);
       return;
     }
@@ -6653,7 +6662,7 @@ function PhoneController({ onBack }: { onBack: () => void }) {
   const activePowerBalance = normalizePowerBalance(phoneSync.powerBalance);
   const activePowerBalanceLabel =
     POWER_BALANCE_OPTIONS.find((option) => option.value === activePowerBalance)?.label ?? "Realistic";
-  const canTakeLiveShot = !currentPlayerId || currentPlayerId === clientId;
+  const canTakeSwing = !currentPlayerId || currentPlayerId === clientId;
   const realisticSwingEnabled = normalizeRealisticSwing(phoneSync.realisticSwing);
 
   return (
@@ -6819,12 +6828,20 @@ function PhoneController({ onBack }: { onBack: () => void }) {
           <button
             style={{
               ...controllerStyles.swingButton,
-              background: "#ffd23b",
+              background: canTakeSwing ? "#ffd23b" : "#263545",
               color: "#1a1a1a",
+              opacity: canTakeSwing ? 1 : 0.45,
             }}
-            onClick={() => setReady(true)}
+            onClick={() => {
+              if (!canTakeSwing) {
+                setStatus(`${currentPlayerName || "Another player"} is up`);
+                return;
+              }
+              setReady(true);
+            }}
+            disabled={!canTakeSwing}
           >
-            READY
+            {canTakeSwing ? "READY" : "WAIT TURN"}
           </button>
         ) : (
           <div style={controllerStyles.swingPair}>
@@ -6835,12 +6852,17 @@ function PhoneController({ onBack }: { onBack: () => void }) {
                   swinging && swingModeRef.current === "practice" ? "#ffb13b" : "#3a7bd6",
                 color: "white",
                 fontSize: 18,
-                opacity: swinging && swingModeRef.current !== "practice" ? 0.45 : 1,
+                opacity:
+                  !canTakeSwing || (swinging && swingModeRef.current !== "practice")
+                    ? 0.45
+                    : 1,
               }}
               onClick={() => startSwing("practice")}
-              disabled={swinging}
+              disabled={swinging || !canTakeSwing}
             >
-              {swinging && swingModeRef.current === "practice"
+              {!canTakeSwing
+                ? "WAIT"
+                : swinging && swingModeRef.current === "practice"
                 ? captureText
                 : puttingMode ? "Practice\nPutt" : chippingMode ? "Practice\nChip" : "Practice\nSwing"}
             </button>
@@ -6851,14 +6873,14 @@ function PhoneController({ onBack }: { onBack: () => void }) {
                   swinging && swingModeRef.current === "live" ? "#ffb13b" : "#63d471",
                 color: "#0d1b16",
                 opacity:
-                  !canTakeLiveShot || (swinging && swingModeRef.current !== "live")
+                  !canTakeSwing || (swinging && swingModeRef.current !== "live")
                     ? 0.45
                     : 1,
               }}
               onClick={() => startSwing("live")}
-              disabled={swinging || !canTakeLiveShot}
+              disabled={swinging || !canTakeSwing}
             >
-              {!canTakeLiveShot
+              {!canTakeSwing
                 ? "WAIT"
                 : swinging && swingModeRef.current === "live"
                   ? captureText
@@ -6869,20 +6891,24 @@ function PhoneController({ onBack }: { onBack: () => void }) {
         {ready && !motionGranted && !swinging && (
           <div style={controllerStyles.fallbackReadyRow}>
             <button
-              style={controllerStyles.smallButton}
+              style={{
+                ...controllerStyles.smallButton,
+                opacity: canTakeSwing ? 1 : 0.45,
+              }}
               onClick={() => useFallbackSwing("practice")}
+              disabled={!canTakeSwing}
             >
-              Fallback Practice
+              {canTakeSwing ? "Fallback Practice" : "Wait Turn"}
             </button>
             <button
               style={{
                 ...controllerStyles.smallButton,
-                opacity: canTakeLiveShot ? 1 : 0.45,
+                opacity: canTakeSwing ? 1 : 0.45,
               }}
               onClick={() => useFallbackSwing("live")}
-              disabled={!canTakeLiveShot}
+              disabled={!canTakeSwing}
             >
-              {canTakeLiveShot ? "Fallback Shot" : "Wait Turn"}
+              {canTakeSwing ? "Fallback Shot" : "Wait Turn"}
             </button>
           </div>
         )}
