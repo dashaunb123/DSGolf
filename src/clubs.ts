@@ -29,7 +29,11 @@ const SIDE_SPIN_FRACTION = 0.6;
  * around 32°, not 55° — because the shaft leans forward at impact. Without
  * this, lofted clubs fire nearly straight up and balloon.
  */
-function launchAngleFor(loft: number): number {
+function launchAngleFor(loft: number, chip = false): number {
+  // A chip/pitch is played with an open face and a steep descent so it lands
+  // soft on the green — it launches much higher than the delofted full swing.
+  // Capped at ~47° so it pops up without ballooning straight into the air.
+  if (chip) return Math.min(0.82, loft + 0.12);
   return Math.min(loft, 0.2 + loft * 0.42);
 }
 
@@ -123,10 +127,14 @@ export function aeroStep(
   pos.addScaledVector(vel, dt);
 }
 
-/** Backspin (+ optional sidespin from shape) angular-velocity vector, rad/s. */
-export function clubSpinVector(club: Club, aimRad: number, shape = 0): THREE.Vector3 {
+/**
+ * Backspin (+ optional sidespin from shape) angular-velocity vector, rad/s.
+ * `spinScale` lets a crisp strike spin up and a thin strike / bad lie spin
+ * down (a flyer), which feeds both the in-air lift and the landing bite.
+ */
+export function clubSpinVector(club: Club, aimRad: number, shape = 0, spinScale = 1): THREE.Vector3 {
   if (club.putter) return new THREE.Vector3();
-  const omega = (club.spinRpm * 2 * Math.PI) / 60;
+  const omega = ((club.spinRpm * 2 * Math.PI) / 60) * Math.max(0, spinScale);
   // "right of flight" horizontal unit (matches the world's -z forward).
   const rx = Math.cos(aimRad);
   const rz = Math.sin(aimRad);
@@ -138,9 +146,9 @@ export function clubSpinVector(club: Club, aimRad: number, shape = 0): THREE.Vec
 }
 
 /** Carry (m) to first ground contact for a launch speed, under full aero. */
-function simulateCarry(club: Club, speed: number): number {
+function simulateCarry(club: Club, speed: number, chip = false): number {
   const spin = clubSpinVector(club, 0, 0);
-  const la = launchAngleFor(club.loft);
+  const la = launchAngleFor(club.loft, chip);
   const vel = new THREE.Vector3(0, Math.sin(la) * speed, -Math.cos(la) * speed);
   const pos = new THREE.Vector3(0, 0.06, 0);
   const dt = 0.02;
@@ -154,15 +162,15 @@ function simulateCarry(club: Club, speed: number): number {
 const speedCache = new Map<string, number>();
 
 /** Binary-search the launch speed that carries the ball `targetCarry` metres. */
-function solveLaunchSpeed(club: Club, targetCarry: number): number {
-  const key = `${club.loft.toFixed(3)}|${club.spinRpm}|${targetCarry.toFixed(1)}`;
+function solveLaunchSpeed(club: Club, targetCarry: number, chip = false): number {
+  const key = `${club.loft.toFixed(3)}|${club.spinRpm}|${targetCarry.toFixed(1)}|${chip ? 1 : 0}`;
   const cached = speedCache.get(key);
   if (cached !== undefined) return cached;
   let lo = 2;
   let hi = 130;
   for (let i = 0; i < 26; i++) {
     const mid = (lo + hi) / 2;
-    if (simulateCarry(club, mid) < targetCarry) lo = mid;
+    if (simulateCarry(club, mid, chip) < targetCarry) lo = mid;
     else hi = mid;
   }
   const speed = (lo + hi) / 2;
@@ -170,17 +178,24 @@ function solveLaunchSpeed(club: Club, targetCarry: number): number {
   return speed;
 }
 
-export function clubInitialVelocity(club: Club, power: number, aimRad: number): THREE.Vector3 {
+export function clubInitialVelocity(
+  club: Club,
+  power: number,
+  aimRad: number,
+  opts: { chip?: boolean } = {},
+): THREE.Vector3 {
   const p = THREE.MathUtils.clamp(power, 0.05, 1);
   if (club.putter) {
     const speed = club.carry * p * 0.6;
     return new THREE.Vector3(Math.sin(aimRad) * speed, 0, -Math.cos(aimRad) * speed);
   }
+  const chip = !!opts.chip;
   // Power maps linearly to carry: pulling back to 50% flies ~50% of the way.
   // The launch speed needed for that carry is solved against the real
-  // aerodynamic flight, so distance stays honest under drag + lift.
-  const speed = solveLaunchSpeed(club, club.carry * p);
-  const la = launchAngleFor(club.loft);
+  // aerodynamic flight (at the chip/full launch angle), so distance stays
+  // honest under drag + lift.
+  const speed = solveLaunchSpeed(club, club.carry * p, chip);
+  const la = launchAngleFor(club.loft, chip);
   const horizontal = Math.cos(la) * speed;
   const vertical = Math.sin(la) * speed;
   return new THREE.Vector3(

@@ -1948,6 +1948,8 @@ type GameProps = {
   aimRef: React.MutableRefObject<number>;
   shotAimOffsetRef: React.MutableRefObject<number>;
   shotShapeRef: React.MutableRefObject<number>;
+  /** Strike-quality spin multiplier for the next shot (1 = flush). */
+  shotSpinQualityRef: React.MutableRefObject<number>;
   clubIdxRef: React.MutableRefObject<number>;
   chargeStartRef: React.MutableRefObject<number | null>;
   pendingShotRef: React.MutableRefObject<boolean>;
@@ -2015,14 +2017,24 @@ function Game(props: GameProps) {
       surface,
     );
     const shotAim = props.aimRef.current + props.shotAimOffsetRef.current;
+    const chip = isChipShot(baseClub, distToCup(phys.pos, layout), surface);
     phys.lastSafe.copy(phys.pos);
     phys.lastSafe.y = 0.06;
-    phys.vel.copy(clubInitialVelocity(club, power, shotAim));
+    phys.vel.copy(clubInitialVelocity(club, power, shotAim, { chip }));
     // Capture shot shape for this flight — putters don't curve.
     phys.shape = club.putter ? 0 : props.shotShapeRef.current;
-    phys.spin.copy(clubSpinVector(club, shotAim, phys.shape));
+    // Spin is set by strike quality and the lie: a crisp strike off clean turf
+    // spins up and checks; thick rough / sand strips spin and produces a
+    // flyer that releases on landing.
+    const lieSpin =
+      surface === "rough" ? 0.55 :
+      surface === "bunker" ? 0.5 :
+      1;
+    const spinScale = THREE.MathUtils.clamp(props.shotSpinQualityRef.current * lieSpin, 0.25, 1.15);
+    phys.spin.copy(clubSpinVector(club, shotAim, phys.shape, spinScale));
     props.shotAimOffsetRef.current = 0;
     props.shotShapeRef.current = 0;
+    props.shotSpinQualityRef.current = 1;
     phys.mode = club.putter ? "rolling" : "flight";
     phys.strokes += 1;
   };
@@ -2132,8 +2144,12 @@ function Game(props: GameProps) {
           surf === "fairway" ? 0.6 :
           surf === "bunker" ? 0.15 :
           surf === "water" ? 0.0 : 0.4;
-        const loftBite = THREE.MathUtils.clamp((club.loft - 0.3) / 0.85, 0, 1);
-        const horizRetain = THREE.MathUtils.lerp(0.82, 0.08, loftBite * surfaceGrab);
+        // Bite is driven by the spin the ball is actually carrying at impact
+        // (decayed through the flight), so a high-spin wedge or crisp chip
+        // checks, while a low-spin long shot or a stripped flyer releases.
+        const spinMag = phys.spin.length();
+        const spinBite = THREE.MathUtils.clamp((spinMag - 150) / 850, 0, 1);
+        const horizRetain = THREE.MathUtils.lerp(0.82, 0.08, spinBite * surfaceGrab);
         phys.vel.x *= horizRetain;
         phys.vel.z *= horizRetain;
         // small bounces fizzle into roll
@@ -2523,13 +2539,15 @@ function TrajectoryPreview({
     lineRef.current.visible = true;
 
     const surf = classifySurface(phys.pos, layout);
+    const baseClub = CLUBS[clubIdxRef.current];
     const club = effectiveClubForLie(
-      effectiveClubForBuild(CLUBS[clubIdxRef.current], playerBuild),
+      effectiveClubForBuild(baseClub, playerBuild),
       surf,
     );
+    const chip = isChipShot(baseClub, distToCup(phys.pos, layout), surf);
     const charging = chargeStartRef.current !== null;
     const power = charging ? displayPowerRef.current : 0.7;
-    const v0 = clubInitialVelocity(club, power, aimRef.current);
+    const v0 = clubInitialVelocity(club, power, aimRef.current, { chip });
 
     let pts: THREE.Vector3[];
     if (club.putter) {
@@ -2701,6 +2719,7 @@ function GolfGame({
   const aimRef = useRef(aimToCup(layout.tee, layout));
   const shotAimOffsetRef = useRef(0);
   const shotShapeRef = useRef(0);
+  const shotSpinQualityRef = useRef(1);
   const clubIdxRef = useRef(suggestClubForBuild(distToCup(layout.tee, layout), false, openingPlayer, "tee"));
   const chargeStartRef = useRef<number | null>(null);
   const pendingShotRef = useRef(false);
@@ -2813,6 +2832,8 @@ function GolfGame({
     // Cap shape so a wild reading can't produce a hook around the whole
     // map. Putters are flat-rolling — no curve.
     shotShapeRef.current = putting ? 0 : THREE.MathUtils.clamp(shape * controlShapeFactor(build) * liePenalty, -0.45, 0.45);
+    // A crisp strike spins up (checks); a thin one spins down (releases).
+    shotSpinQualityRef.current = putting ? 1 : THREE.MathUtils.lerp(0.6, 1.1, quality);
     if (label) {
       const missLabel =
         Math.abs(miss) < 0.035
@@ -3291,6 +3312,7 @@ function GolfGame({
           aimRef={aimRef}
           shotAimOffsetRef={shotAimOffsetRef}
           shotShapeRef={shotShapeRef}
+          shotSpinQualityRef={shotSpinQualityRef}
           clubIdxRef={clubIdxRef}
           chargeStartRef={chargeStartRef}
           pendingShotRef={pendingShotRef}
