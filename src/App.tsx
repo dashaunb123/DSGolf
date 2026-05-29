@@ -2619,6 +2619,8 @@ function GolfGame({
   currentPlayerRef.current = currentPlayer;
   const currentPlayerIdRef = useRef(currentPlayer?.id ?? "");
   currentPlayerIdRef.current = currentPlayer?.id ?? "";
+  const currentPlayerIdxRef = useRef(currentPlayerIdx);
+  currentPlayerIdxRef.current = currentPlayerIdx;
 
   // If the players prop changes shape (e.g. mid-game add), keep scorecards in sync.
   useEffect(() => {
@@ -2658,7 +2660,7 @@ function GolfGame({
 
   const publishPhoneState = (state: Partial<PhoneSyncState> = {}) => {
     if (!hostInfo) return;
-    const player = players[currentPlayerIdx] ?? players[0];
+    const player = players[currentPlayerIdxRef.current] ?? currentPlayerRef.current ?? players[0];
     const clubIdx = state.clubIdx ?? clubIdxRef.current;
     const club = CLUBS[clubIdx] ?? CLUBS[clubIdxRef.current];
     const distanceMeters = state.distanceMeters ?? hudRef.current.distance;
@@ -2857,9 +2859,6 @@ function GolfGame({
   useEffect(() => {
     playerBallStatesRef.current = players.map(() => null);
   }, [holeIndex, players.length]);
-
-  const currentPlayerIdxRef = useRef(currentPlayerIdx);
-  currentPlayerIdxRef.current = currentPlayerIdx;
 
   const setActivePlayerIdx = (idx: number) => {
     currentPlayerIdxRef.current = idx;

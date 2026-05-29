@@ -370,3 +370,7 @@ TODO:
   - `switchToPlayer` now updates `currentPlayerIdxRef` immediately and publishes the next active player's id/name/build/distance/surface directly, instead of waiting for the React effect after render.
   - New-hole setup now also publishes the explicit active player from the ref, reducing the window where hole 2 can still think the previous hole's last player is active.
   - `npm run build` and `npx tsc --noEmit` pass. Build still has the existing Vite large chunk warning.
+- Phone club-change active-player fix:
+  - Root cause: the host EventSource listener is registered once, so phone `club` actions can run through a stale `publishPhoneState` closure from the initial render. The action guard used refs and allowed player 2 correctly, but publishing used the old `currentPlayerIdx` value and broadcast player 1 as active.
+  - Moved `currentPlayerIdxRef` next to the other active-player refs and made `publishPhoneState` resolve the active player from `currentPlayerIdxRef/currentPlayerRef`, so club changes preserve the current active phone.
+  - `npx tsc --noEmit` and `npm run build` pass. Build still has the existing Vite large chunk warning.
