@@ -613,7 +613,7 @@ export const POS = makeHoleLayout(HOLE);
 
 export type Surface = "tee" | "green" | "fairway" | "bunker" | "water" | "rough";
 
-const FAIRWAY_LIE_MARGIN = 3.5;
+const FAIRWAY_LIE_MARGIN = 0;
 
 function pointInRotatedFairwayRect(p: THREE.Vector3, zone: Extract<FairwayZone, { kind: "rect" }>, rot: number) {
   const dx = p.x - zone.x;

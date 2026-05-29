@@ -15,9 +15,9 @@ import {
 } from "./layout";
 import {
   CLUBS,
-  GRAVITY,
-  SHAPE_CURVE_COEFF,
+  aeroStep,
   clubInitialVelocity,
+  clubSpinVector,
   simulateFlight,
 } from "./clubs";
 
@@ -1665,10 +1665,64 @@ type PhysState = {
   sunk: boolean;
   /** Active shot shape (radians) — non-zero only during flight after a swing. */
   shape: number;
+  /** Live backspin/sidespin angular velocity (rad/s) during flight. */
+  spin: THREE.Vector3;
 };
 
 function distToCup(p: THREE.Vector3, hole: HoleLayout = POS) {
   return Math.hypot(p.x - hole.cup.x, p.z - hole.cup.z);
+}
+
+type Wind = { speed: number; dir: number };
+
+/** Fresh wind for a hole: ~25% calm, otherwise 1–8 m/s from a random heading. */
+function randomWind(): Wind {
+  if (Math.random() < 0.25) return { speed: 0, dir: 0 };
+  return { speed: 1 + Math.random() * 7, dir: Math.random() * Math.PI * 2 };
+}
+
+/** Wind as a world-space air-velocity vector (-z is toward the green). */
+function windToVector(w: Wind): THREE.Vector3 {
+  return new THREE.Vector3(Math.sin(w.dir) * w.speed, 0, -Math.cos(w.dir) * w.speed);
+}
+
+// Trees render at [t.x, 0, t.z] with the given scale; the trunk + canopy roughly
+// fill a cylinder of radius ~0.9·scale up to ~2.7·scale tall.
+const TREE_COLLISION_RADIUS = 0.9;
+const TREE_COLLISION_HEIGHT = 2.7;
+
+/**
+ * Stop a ball that flies/rolls into a tree: push it back out of the canopy,
+ * kill most of its energy, and drop it. Returns true on contact.
+ */
+function collideTrees(phys: PhysState, layout: HoleLayout): boolean {
+  for (const t of layout.trees) {
+    const s = t.scale ?? 1.6;
+    const radius = TREE_COLLISION_RADIUS * s;
+    const height = TREE_COLLISION_HEIGHT * s;
+    if (phys.pos.y > height) continue;
+    const dx = phys.pos.x - t.x;
+    const dz = phys.pos.z - t.z;
+    const d = Math.hypot(dx, dz);
+    if (d >= radius || d < 1e-4) continue;
+    const nx = dx / d;
+    const nz = dz / d;
+    // Shove the ball to the canopy edge it entered from.
+    phys.pos.x = t.x + nx * radius;
+    phys.pos.z = t.z + nz * radius;
+    // Remove the velocity component heading into the tree, then bleed energy.
+    const inward = phys.vel.x * nx + phys.vel.z * nz;
+    if (inward < 0) {
+      phys.vel.x -= inward * nx;
+      phys.vel.z -= inward * nz;
+    }
+    phys.vel.multiplyScalar(0.22);
+    if (phys.vel.y > 0) phys.vel.y = 0;
+    phys.shape = 0;
+    phys.spin.set(0, 0, 0);
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -1890,6 +1944,7 @@ async function getServerConfig() {
 
 type GameProps = {
   layout: HoleLayout;
+  windRef: React.MutableRefObject<THREE.Vector3>;
   aimRef: React.MutableRefObject<number>;
   shotAimOffsetRef: React.MutableRefObject<number>;
   shotShapeRef: React.MutableRefObject<number>;
@@ -1939,6 +1994,7 @@ function Game(props: GameProps) {
     strokes: 0,
     sunk: false,
     shape: 0,
+    spin: new THREE.Vector3(),
   });
   const swingStartRef = useRef<number | null>(null);
   const swingPowerRef = useRef(0);
@@ -1964,6 +2020,7 @@ function Game(props: GameProps) {
     phys.vel.copy(clubInitialVelocity(club, power, shotAim));
     // Capture shot shape for this flight — putters don't curve.
     phys.shape = club.putter ? 0 : props.shotShapeRef.current;
+    phys.spin.copy(clubSpinVector(club, shotAim, phys.shape));
     props.shotAimOffsetRef.current = 0;
     props.shotShapeRef.current = 0;
     phys.mode = club.putter ? "rolling" : "flight";
@@ -2051,23 +2108,15 @@ function Game(props: GameProps) {
 
     // physics: flight phase
     if (phys.mode === "flight") {
-      phys.vel.y -= GRAVITY * dt;
-      // Magnus-like in-flight curve. Side force is perpendicular to the
-      // horizontal flight direction, scaled by horizontal speed × shape.
-      if (phys.shape !== 0) {
-        const horizSpeed = Math.hypot(phys.vel.x, phys.vel.z);
-        if (horizSpeed > 0.1) {
-          const fx = phys.vel.x / horizSpeed;
-          const fz = phys.vel.z / horizSpeed;
-          // "right of flight" in horizontal plane.
-          const rx = -fz;
-          const rz = fx;
-          const sideAccel = phys.shape * horizSpeed * SHAPE_CURVE_COEFF;
-          phys.vel.x += rx * sideAccel * dt;
-          phys.vel.z += rz * sideAccel * dt;
+      // Full aerodynamic step: gravity + drag + spin lift, against the wind.
+      aeroStep(phys.pos, phys.vel, phys.spin, props.windRef.current, dt);
+      if (collideTrees(phys, layout)) {
+        // A tree knocked the ball down; let it settle/roll.
+        if (phys.pos.y <= 0.06) {
+          phys.pos.y = 0.06;
+          phys.mode = "rolling";
         }
       }
-      phys.pos.addScaledVector(phys.vel, dt);
       if (phys.pos.y <= 0.06) {
         phys.pos.y = 0.06;
         const club = CLUBS[props.clubIdxRef.current];
@@ -2086,8 +2135,9 @@ function Game(props: GameProps) {
         if (phys.vel.y < 1.5) {
           phys.vel.y = 0;
           phys.mode = "rolling";
-          // No more Magnus once we're on the ground.
+          // No more aero once we're on the ground.
           phys.shape = 0;
+          phys.spin.set(0, 0, 0);
         }
       }
     } else if (phys.mode === "rolling") {
@@ -2103,6 +2153,7 @@ function Game(props: GameProps) {
         phys.vel.z *= k;
         phys.pos.addScaledVector(phys.vel, dt);
         phys.pos.y = 0.06;
+        collideTrees(phys, layout);
       } else {
         phys.vel.set(0, 0, 0);
         phys.mode = "idle";
@@ -2297,6 +2348,7 @@ function Game(props: GameProps) {
       <TrajectoryPreview
         layout={layout}
         physRef={physRef}
+        windRef={props.windRef}
         aimRef={props.aimRef}
         clubIdxRef={props.clubIdxRef}
         chargeStartRef={props.chargeStartRef}
@@ -2430,6 +2482,7 @@ function BallTrail({ physRef }: { physRef: React.MutableRefObject<PhysState> }) 
 function TrajectoryPreview({
   layout,
   physRef,
+  windRef,
   aimRef,
   clubIdxRef,
   chargeStartRef,
@@ -2438,6 +2491,7 @@ function TrajectoryPreview({
 }: {
   layout: HoleLayout;
   physRef: React.MutableRefObject<PhysState>;
+  windRef: React.MutableRefObject<THREE.Vector3>;
   aimRef: React.MutableRefObject<number>;
   clubIdxRef: React.MutableRefObject<number>;
   chargeStartRef: React.MutableRefObject<number | null>;
@@ -2517,6 +2571,7 @@ function TrajectoryPreview({
       pts = simulateFlight(
         phys.pos.clone().add(new THREE.Vector3(0, 0.02, 0)),
         v0,
+        { spin: clubSpinVector(club, aimRef.current, 0), wind: windRef.current },
       );
       if (stopRef.current) {
         const end = pts[pts.length - 1];
@@ -2585,6 +2640,11 @@ function GolfGame({
   const [holeIndex, setHoleIndex] = useState(0);
   const [currentPlayerIdx, setCurrentPlayerIdx] = useState(0);
   const layout = useMemo(() => makeHoleLayout(COURSE_HOLES[holeIndex]), [holeIndex]);
+  const [wind, setWind] = useState<Wind>(() => randomWind());
+  const windRef = useRef<THREE.Vector3>(new THREE.Vector3());
+  useEffect(() => {
+    windRef.current.copy(windToVector(wind));
+  }, [wind]);
   const [hud, setHud] = useState<HudState>({
     aim: aimToCup(POS.tee),
     clubIdx: suggestClubForBuild(POS.tee.distanceTo(POS.cup), false, openingPlayer, "tee"),
@@ -2801,6 +2861,9 @@ function GolfGame({
     const nextDistance = distToCup(nextLayout.tee, nextLayout);
     const nextPlayer = players[currentPlayerIdxRef.current] ?? players[0];
     const nextClub = suggestClubForBuild(nextDistance, false, nextPlayer, "tee");
+    const nextWind = randomWind();
+    setWind(nextWind);
+    windRef.current.copy(windToVector(nextWind));
     aimRef.current = aimToCup(nextLayout.tee, nextLayout);
     clubIdxRef.current = nextClub;
     shotAimOffsetRef.current = 0;
@@ -3219,6 +3282,7 @@ function GolfGame({
       >
         <Game
           layout={layout}
+          windRef={windRef}
           aimRef={aimRef}
           shotAimOffsetRef={shotAimOffsetRef}
           shotShapeRef={shotShapeRef}
@@ -3260,6 +3324,7 @@ function GolfGame({
         holeNumber={layout.number}
         holePar={layout.par}
         holesTotal={COURSE_HOLES.length}
+        wind={wind}
         finalHole={holeIndex === COURSE_HOLES.length - 1}
         currentPlayer={currentPlayer}
         currentBuild={currentBuild}
@@ -3833,6 +3898,7 @@ function HUD({
   holeNumber,
   holePar,
   holesTotal,
+  wind,
   finalHole,
   currentPlayer,
   currentBuild,
@@ -3857,6 +3923,7 @@ function HUD({
   holeNumber: number;
   holePar: number;
   holesTotal: number;
+  wind: { speed: number; dir: number };
   finalHole: boolean;
   currentPlayer?: GolfPlayer;
   currentBuild: PlayerBuild;
@@ -3902,6 +3969,36 @@ function HUD({
         <HoleMapSvg layout={layout} ball={ball} aim={aim} compact />
         <div style={{ fontSize: 18, fontWeight: 700 }}>
           Hole {holeNumber} of {holesTotal} · Par {holePar}
+        </div>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            fontSize: 13,
+            opacity: 0.92,
+          }}
+        >
+          <span>Wind</span>
+          {wind.speed < 0.5 ? (
+            <span style={{ fontWeight: 700 }}>Calm</span>
+          ) : (
+            <>
+              <span
+                style={{
+                  display: "inline-block",
+                  transform: `rotate(${wind.dir}rad)`,
+                  fontWeight: 700,
+                }}
+                title="Direction the wind is blowing (up = toward the green)"
+              >
+                ↑
+              </span>
+              <span style={{ fontWeight: 700 }}>
+                {(wind.speed * 2.23694).toFixed(0)} mph
+              </span>
+            </>
+          )}
         </div>
         {currentPlayer && players && players.length > 1 && (
           <div
@@ -5173,7 +5270,7 @@ function MenuScreen({
       <div style={menuStyles.panel}>
         <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 6 }}>
           <div style={{ fontSize: 34, fontWeight: 900 }}>DSGolf</div>
-          <div style={menuStyles.versionBadge}>v1.1</div>
+          <div style={menuStyles.versionBadge}>v1.2</div>
         </div>
         <div style={{ opacity: 0.78, marginBottom: 24 }}>
           Host the course on this screen, then friends can join from phones with the game code.
