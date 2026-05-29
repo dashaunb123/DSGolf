@@ -30,10 +30,10 @@ const SIDE_SPIN_FRACTION = 0.6;
  * this, lofted clubs fire nearly straight up and balloon.
  */
 function launchAngleFor(loft: number, chip = false): number {
-  // A chip/pitch is played with an open face and a steep descent so it lands
-  // soft on the green — it launches much higher than the delofted full swing.
-  // Capped at ~47° so it pops up without ballooning straight into the air.
-  if (chip) return Math.min(0.82, loft + 0.12);
+  // A chip/pitch is played with an open face and a steep descent so it lobs
+  // up high and lands soft on the green — much higher than the delofted full
+  // swing. Capped at ~57° so it stays high without looping straight up.
+  if (chip) return Math.min(1.0, loft + 0.15);
   return Math.min(loft, 0.2 + loft * 0.42);
 }
 
@@ -190,11 +190,13 @@ export function clubInitialVelocity(
     return new THREE.Vector3(Math.sin(aimRad) * speed, 0, -Math.cos(aimRad) * speed);
   }
   const chip = !!opts.chip;
-  // Power maps linearly to carry: pulling back to 50% flies ~50% of the way.
-  // The launch speed needed for that carry is solved against the real
-  // aerodynamic flight (at the chip/full launch angle), so distance stays
-  // honest under drag + lift.
-  const speed = solveLaunchSpeed(club, club.carry * p, chip);
+  // Full shots map power linearly to carry (50% pull ~= 50% distance). Chips
+  // use a gentler quadratic response so a soft input stays short and lands on
+  // the green instead of flying over — and the meter is far less touchy.
+  const targetCarry = chip ? club.carry * p * p : club.carry * p;
+  // The launch speed for that carry is solved against the real aerodynamic
+  // flight at the chip/full launch angle, so distance stays honest.
+  const speed = solveLaunchSpeed(club, targetCarry, chip);
   const la = launchAngleFor(club.loft, chip);
   const horizontal = Math.cos(la) * speed;
   const vertical = Math.sin(la) * speed;
