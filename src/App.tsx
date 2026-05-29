@@ -5172,7 +5172,10 @@ function MenuScreen({
   return (
     <div style={menuStyles.shell}>
       <div style={menuStyles.panel}>
-        <div style={{ fontSize: 34, fontWeight: 900, marginBottom: 6 }}>DSGolf</div>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 6 }}>
+          <div style={{ fontSize: 34, fontWeight: 900 }}>DSGolf</div>
+          <div style={menuStyles.versionBadge}>v1.1</div>
+        </div>
         <div style={{ opacity: 0.78, marginBottom: 24 }}>
           Host the course on this screen, then friends can join from phones with the game code.
         </div>
@@ -6970,6 +6973,16 @@ const menuStyles = {
     borderRadius: 8,
     padding: 24,
     boxShadow: "0 18px 55px rgba(31,62,94,0.18)",
+  } satisfies React.CSSProperties,
+  versionBadge: {
+    padding: "3px 8px",
+    borderRadius: 999,
+    background: "rgba(29,111,66,0.12)",
+    border: "1px solid rgba(29,111,66,0.24)",
+    color: "#1d6f42",
+    fontSize: 13,
+    fontWeight: 900,
+    fontVariantNumeric: "tabular-nums",
   } satisfies React.CSSProperties,
   primaryButton: {
     width: "100%",
