@@ -364,3 +364,9 @@ TODO:
   - The club uses the existing local `+X` ball-facing convention and existing `charge`/`swing` state; it returns to the address/ball position at `CLUB_IMPACT_FRAC = 0.42`, matching the host shot-impact timing.
   - This does not change shot physics, phone input, aim, stance placement, or collision.
   - `npx tsc --noEmit`, `npm run build`, and `node --check server.mjs` pass. Existing Vite large chunk warning remains.
+- Hole 2 phone turn-switch fix:
+  - Root cause was likely stale/out-of-order phone sync around turn changes: landing publishes were fire-and-forget, so an older "current player just landed" host_state could arrive after the delayed "next player is up" host_state on phones.
+  - Host phone-state publishes are now serialized through a small promise queue, so phones receive host_state updates in game order.
+  - `switchToPlayer` now updates `currentPlayerIdxRef` immediately and publishes the next active player's id/name/build/distance/surface directly, instead of waiting for the React effect after render.
+  - New-hole setup now also publishes the explicit active player from the ref, reducing the window where hole 2 can still think the previous hole's last player is active.
+  - `npm run build` and `npx tsc --noEmit` pass. Build still has the existing Vite large chunk warning.

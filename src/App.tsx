@@ -2654,6 +2654,7 @@ function GolfGame({
   viewModeRef.current = viewMode;
   introVisibleRef.current = introVisible;
   const messageTimeoutRef = useRef<number | null>(null);
+  const phoneStatePublishQueueRef = useRef<Promise<void>>(Promise.resolve());
 
   const publishPhoneState = (state: Partial<PhoneSyncState> = {}) => {
     if (!hostInfo) return;
@@ -2675,11 +2676,12 @@ function GolfGame({
       recommendedPower: recommendedPowerForShot(club, distanceMeters, surface, player),
       ...state,
     };
-    void apiPost("/api/lobbies/state", {
+    const postState = () => apiPost("/api/lobbies/state", {
       clientId: hostInfo.clientId,
       code: hostInfo.code,
       state: full,
-    }).catch(() => {});
+    }).then(() => undefined).catch(() => undefined);
+    phoneStatePublishQueueRef.current = phoneStatePublishQueueRef.current.then(postState, postState);
   };
 
   // Re-publish whenever the active player changes so phones can show whose turn it is.
@@ -2795,7 +2797,8 @@ function GolfGame({
   const setUpHole = (nextIndex: number, announce = true) => {
     const nextLayout = makeHoleLayout(COURSE_HOLES[nextIndex]);
     const nextDistance = distToCup(nextLayout.tee, nextLayout);
-    const nextClub = suggestClubForBuild(nextDistance, false, players[0], "tee");
+    const nextPlayer = players[currentPlayerIdxRef.current] ?? players[0];
+    const nextClub = suggestClubForBuild(nextDistance, false, nextPlayer, "tee");
     aimRef.current = aimToCup(nextLayout.tee, nextLayout);
     clubIdxRef.current = nextClub;
     shotAimOffsetRef.current = 0;
@@ -2816,7 +2819,16 @@ function GolfGame({
       displayPower: 0,
       sunk: false,
     });
-    publishPhoneState({ clubIdx: nextClub, distanceMeters: nextDistance, surface: "tee" });
+    publishPhoneState({
+      clubIdx: nextClub,
+      currentPlayerId: nextPlayer?.id,
+      currentPlayerName: nextPlayer?.name,
+      currentPlayerBuildId: normalizeBuildId(nextPlayer?.buildId),
+      distanceMeters: nextDistance,
+      surface: "tee",
+      isPutter: !!CLUBS[nextClub]?.putter,
+      recommendedPower: recommendedPowerForShot(CLUBS[nextClub], nextDistance, "tee", nextPlayer),
+    });
     if (announce) {
       flashMessage(`Hole ${nextLayout.number} · Par ${nextLayout.par}`, 1800);
     }
@@ -2848,6 +2860,11 @@ function GolfGame({
 
   const currentPlayerIdxRef = useRef(currentPlayerIdx);
   currentPlayerIdxRef.current = currentPlayerIdx;
+
+  const setActivePlayerIdx = (idx: number) => {
+    currentPlayerIdxRef.current = idx;
+    setCurrentPlayerIdx(idx);
+  };
 
   const showTurnBanner = (name: string) => {
     setBannerName(name);
@@ -2882,7 +2899,7 @@ function GolfGame({
     pendingShotRef.current = false;
     displayPowerRef.current = 0;
 
-    setCurrentPlayerIdx(newIdx);
+    setActivePlayerIdx(newIdx);
     setHud({
       aim: aimRef.current,
       clubIdx: club,
@@ -2893,6 +2910,16 @@ function GolfGame({
       mode: "idle",
       displayPower: 0,
       sunk,
+    });
+    publishPhoneState({
+      clubIdx: club,
+      currentPlayerId: nextPlayer?.id,
+      currentPlayerName: nextPlayer?.name,
+      currentPlayerBuildId: normalizeBuildId(nextPlayer?.buildId),
+      distanceMeters: dist,
+      surface: surf,
+      isPutter: !!CLUBS[club]?.putter,
+      recommendedPower: recommendedPowerForShot(CLUBS[club], dist, surf, nextPlayer),
     });
 
     if (nextPlayer) {
@@ -2990,7 +3017,7 @@ function GolfGame({
     if (lastHole) return; // game over — leave on overlay
     const timer = window.setTimeout(() => {
       playerBallStatesRef.current = players.map(() => null);
-      setCurrentPlayerIdx(0);
+      setActivePlayerIdx(0);
       setUpHole(holeIndex + 1);
     }, 1800);
     return () => window.clearTimeout(timer);
