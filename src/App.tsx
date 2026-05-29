@@ -2123,14 +2123,19 @@ function Game(props: GameProps) {
         // tally bounce per club bounciness; damp horizontal speed
         phys.vel.y = -phys.vel.y * club.bounce;
         const surf = classifySurface(phys.pos, layout);
-        const surfaceDamp =
-          surf === "green" ? 0.85 :
-          surf === "fairway" ? 0.78 :
-          surf === "bunker" ? 0.30 :
-          surf === "water" ? 0.10 : 0.55;
-        const horizDamp = (0.55 + club.bounce * 0.25) * surfaceDamp;
-        phys.vel.x *= horizDamp;
-        phys.vel.z *= horizDamp;
+        // Backspin "bite" on landing: a lofted club coming down with spin
+        // checks up and grabs on receptive turf instead of running out, while
+        // low-lofted clubs and poor lies release forward. This is what makes
+        // chips and approach wedges hold the green.
+        const surfaceGrab =
+          surf === "green" ? 1.0 :
+          surf === "fairway" ? 0.6 :
+          surf === "bunker" ? 0.15 :
+          surf === "water" ? 0.0 : 0.4;
+        const loftBite = THREE.MathUtils.clamp((club.loft - 0.3) / 0.85, 0, 1);
+        const horizRetain = THREE.MathUtils.lerp(0.82, 0.08, loftBite * surfaceGrab);
+        phys.vel.x *= horizRetain;
+        phys.vel.z *= horizRetain;
         // small bounces fizzle into roll
         if (phys.vel.y < 1.5) {
           phys.vel.y = 0;
