@@ -2132,9 +2132,19 @@ function Game(props: GameProps) {
       if (phys.pos.y <= 0.06) {
         phys.pos.y = 0.06;
         const club = CLUBS[props.clubIdxRef.current];
+        const surf = classifySurface(phys.pos, layout);
+        // Sand plugs the ball: no bounce out, most of the forward speed dies
+        // in the sand. The remaining trickle stops fast under bunker friction.
+        if (surf === "bunker") {
+          phys.vel.y = 0;
+          phys.vel.x *= 0.15;
+          phys.vel.z *= 0.15;
+          phys.mode = "rolling";
+          phys.shape = 0;
+          phys.spin.set(0, 0, 0);
+        } else {
         // tally bounce per club bounciness; damp horizontal speed
         phys.vel.y = -phys.vel.y * club.bounce;
-        const surf = classifySurface(phys.pos, layout);
         // Backspin "bite" on landing: a lofted club coming down with spin
         // checks up and grabs on receptive turf instead of running out, while
         // low-lofted clubs and poor lies release forward. This is what makes
@@ -2142,7 +2152,6 @@ function Game(props: GameProps) {
         const surfaceGrab =
           surf === "green" ? 1.0 :
           surf === "fairway" ? 0.6 :
-          surf === "bunker" ? 0.15 :
           surf === "water" ? 0.0 : 0.4;
         // Bite is driven by the spin the ball is actually carrying at impact
         // (decayed through the flight), so a high-spin wedge or crisp chip
@@ -2159,6 +2168,7 @@ function Game(props: GameProps) {
           // No more aero once we're on the ground.
           phys.shape = 0;
           phys.spin.set(0, 0, 0);
+        }
         }
       }
     } else if (phys.mode === "rolling") {
