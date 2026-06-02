@@ -35,7 +35,7 @@ const MUSIC_VOLUME = 0.1;
 const SWING_VOLUME = 0.85;
 const COMMENTARY_VOLUME = 0.82;
 const KOKORO_MODEL_ID = "onnx-community/Kokoro-82M-v1.0-ONNX";
-const KOKORO_VOICE = "af_bella";
+const KOKORO_VOICE = "am_michael";
 
 type Mode = "idle" | "flight" | "rolling" | "holed";
 type ViewMode = "play" | "overhead";
@@ -437,7 +437,7 @@ function KokoroCommentator({ onReady }: { onReady: (speak: (text: string) => voi
           if (!text) continue;
           const generated = await ttsRef.current.generate(text, {
             voice: KOKORO_VOICE,
-            speed: 1.05,
+            speed: 1.15,
           });
           await playGeneratedAudio(generated.toBlob());
         }
@@ -453,10 +453,39 @@ function KokoroCommentator({ onReady }: { onReady: (speak: (text: string) => voi
       loadingRef.current = true;
       try {
         const { KokoroTTS } = await import("kokoro-js");
-        ttsRef.current = await KokoroTTS.from_pretrained(KOKORO_MODEL_ID, {
-          dtype: "q4",
-          device: "wasm",
-        });
+        // WebGPU is dramatically faster than wasm/CPU for generation; fall
+        // back to wasm when it isn't available so commentary still works.
+        const hasWebGPU = typeof navigator !== "undefined" && "gpu" in navigator;
+        if (hasWebGPU) {
+          try {
+            ttsRef.current = await KokoroTTS.from_pretrained(KOKORO_MODEL_ID, {
+              dtype: "fp32",
+              device: "webgpu",
+            });
+          } catch (gpuErr) {
+            console.warn("Kokoro WebGPU unavailable, falling back to wasm", gpuErr);
+          }
+        }
+        if (!ttsRef.current) {
+          ttsRef.current = await KokoroTTS.from_pretrained(KOKORO_MODEL_ID, {
+            dtype: "q4",
+            device: "wasm",
+          });
+        }
+        // Cold-start: the first generate() compiles shaders / optimizes the
+        // graph and is far slower than later calls. Pay that once on a
+        // throwaway phrase during load/idle (when nothing is queued) so the
+        // first real commentary line plays without that delay.
+        if (mountedRef.current && queueRef.current.length === 0) {
+          try {
+            await ttsRef.current.generate("Welcome to the course.", {
+              voice: KOKORO_VOICE,
+              speed: 1.15,
+            });
+          } catch {
+            /* warmup is best-effort */
+          }
+        }
         void drainQueue();
       } catch (err) {
         console.warn("Kokoro model failed to load", err);
