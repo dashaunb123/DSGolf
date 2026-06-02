@@ -374,3 +374,24 @@ TODO:
   - Root cause: the host EventSource listener is registered once, so phone `club` actions can run through a stale `publishPhoneState` closure from the initial render. The action guard used refs and allowed player 2 correctly, but publishing used the old `currentPlayerIdx` value and broadcast player 1 as active.
   - Moved `currentPlayerIdxRef` next to the other active-player refs and made `publishPhoneState` resolve the active player from `currentPlayerIdxRef/currentPlayerRef`, so club changes preserve the current active phone.
   - `npx tsc --noEmit` and `npm run build` pass. Build still has the existing Vite large chunk warning.
+- Larger greens and water hazards pass:
+  - Added shared layout support for compound elliptical greens, scaling every green much larger and giving holes varied two/three-lobed green shapes instead of one circular green.
+  - Added water-zone layout data and generated water hazards on holes 4, 8, 11, 15, and 18, including island/cape/creek/peninsula-style hazards.
+  - Updated `Hole.tsx` rendering with shoreline edges, reflective blue water surfaces, highlights, and ripple details; greens now render from the compound zone data.
+  - Updated the hole overview/minimap to show water hazards and the new shaped greens from the same layout data used by gameplay.
+  - Changed surface classification so water is a real playable hazard lie, with green/tee priority preserved where water surrounds an island green.
+  - Changed shot resolution so landing in water or rolling into water immediately returns the ball to the previous safe position and adds the existing `+1` stroke penalty, avoiding the old zero-friction water edge case.
+  - `npx tsc --noEmit` and `npm run build` pass. Build still has the existing Vite large chunk warning.
+- Gameplay audio pass:
+  - Stopped the local Vite dev server that was listening on port 5173.
+  - Moved `birds.mp3`, `music.mp3`, and `swing.mp3` from transient `dist/assets` copies into `src/assets/audio` so future Vite builds preserve and hash them.
+  - Added `GameplayAudio` to `src/App.tsx`; it mounts only while the round is in `playing` mode, loops birds ambience at 45%, loops music at 10%, and retries playback on the first gameplay click/key if browser autoplay blocks the initial start.
+  - Added an `onImpact` callback from `Game` to `GolfGame`; `swing.mp3` plays when `fireShot()` runs at the existing impact timing, so the sound lines up with ball contact rather than button release.
+  - `npx tsc --noEmit` and `npm run build` pass. Build emits hashed MP3 assets plus the expected existing Vite large chunk warning.
+- Kokoro commentator pass:
+  - Installed `kokoro-js` and added a lazy `KokoroCommentator` in `src/App.tsx`.
+  - Commentator uses `KokoroTTS.from_pretrained("onnx-community/Kokoro-82M-v1.0-ONNX", { dtype: "q4", device: "wasm" })` and voice `af_bella`.
+  - The model loads on first gameplay click/key or first queued commentary request, so the round is not blocked by the TTS model download/cache load.
+  - Generated `RawAudio` is played through `toBlob()` object URLs at 82% volume, with a short queue capped to the latest four calls.
+  - Wired commentary for first tee/player turns, hole changes, water penalties, bunker/rough/green landings, and hole-outs.
+  - `npx tsc --noEmit` and `npm run build` pass. Build emits a separate `kokoro-*.js` chunk and `ort-wasm-simd-threaded.jsep-*.wasm`; first use still depends on downloading/caching Kokoro model files from Hugging Face.

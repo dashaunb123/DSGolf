@@ -1,7 +1,7 @@
 import { Flagstick } from "./Flagstick";
 import { SceneEnvironment } from "./SceneEnvironment";
 import { Tree } from "./Tree";
-import { POS, type FairwayZone, type HoleLayout } from "./layout";
+import { POS, type FairwayZone, type HoleLayout, type WaterZone } from "./layout";
 
 function FairwayDetail({ zone, index }: { zone: FairwayZone; index: number }) {
   if (zone.kind === "circle") {
@@ -40,6 +40,63 @@ function FairwayDetail({ zone, index }: { zone: FairwayZone; index: number }) {
               opacity={0.26}
               roughness={0.92}
             />
+          </mesh>
+        );
+      })}
+    </group>
+  );
+}
+
+function WaterPatch({ zone, index }: { zone: WaterZone; index: number }) {
+  const rot = zone.rot || 0;
+  const waveColor = index % 2 === 0 ? "#d6fbff" : "#b9edf7";
+
+  if (zone.kind === "ellipse") {
+    return (
+      <group rotation={[-Math.PI / 2, 0, rot]} position={[zone.x, 0.017, zone.z]}>
+        <mesh scale={[zone.rx * 1.05, zone.rz * 1.05, 1]} receiveShadow>
+          <ringGeometry args={[0.91, 1, 72]} />
+          <meshStandardMaterial color="#234f45" roughness={0.95} />
+        </mesh>
+        <mesh scale={[zone.rx, zone.rz, 1]} receiveShadow>
+          <circleGeometry args={[1, 96]} />
+          <meshStandardMaterial color="#177c99" roughness={0.18} metalness={0.08} transparent opacity={0.88} />
+        </mesh>
+        <mesh position={[0, 0, 0.004]} scale={[zone.rx * 0.76, zone.rz * 0.7, 1]}>
+          <circleGeometry args={[1, 72]} />
+          <meshStandardMaterial color="#42b8cc" roughness={0.12} metalness={0.15} transparent opacity={0.32} />
+        </mesh>
+        {[0.3, 0.48, 0.66, 0.82].map((r, i) => (
+          <mesh
+            key={`water-ellipse-ripple-${index}-${i}`}
+            position={[0, 0, 0.007 + i * 0.001]}
+            scale={[zone.rx, zone.rz, 1]}
+          >
+            <ringGeometry args={[r, r + 0.01, 72]} />
+            <meshStandardMaterial color={waveColor} roughness={0.28} transparent opacity={0.18 - i * 0.025} />
+          </mesh>
+        ))}
+      </group>
+    );
+  }
+
+  const stripeCount = Math.max(4, Math.floor(zone.d / 18));
+  return (
+    <group rotation={[-Math.PI / 2, 0, rot]} position={[zone.x, 0.017, zone.z]}>
+      <mesh position={[0, 0, -0.002]} receiveShadow>
+        <planeGeometry args={[zone.w * 1.08, zone.d * 1.04]} />
+        <meshStandardMaterial color="#234f45" roughness={0.95} />
+      </mesh>
+      <mesh receiveShadow>
+        <planeGeometry args={[zone.w, zone.d]} />
+        <meshStandardMaterial color="#177c99" roughness={0.18} metalness={0.08} transparent opacity={0.88} />
+      </mesh>
+      {Array.from({ length: stripeCount }).map((_, i) => {
+        const z = -zone.d / 2 + ((i + 0.5) * zone.d) / stripeCount;
+        return (
+          <mesh key={`water-rect-ripple-${index}-${i}`} position={[0, z, 0.006 + i * 0.001]}>
+            <planeGeometry args={[zone.w * (0.55 + (i % 2) * 0.22), 0.18]} />
+            <meshStandardMaterial color={waveColor} roughness={0.25} transparent opacity={0.2} />
           </mesh>
         );
       })}
@@ -102,6 +159,11 @@ export function Hole({
         <FairwayDetail key={`fairway-detail-${index}`} zone={zone} index={index} />
       ))}
 
+      {/* Water hazards */}
+      {layout.water.map((zone, index) => (
+        <WaterPatch key={`water-${index}`} zone={zone} index={index} />
+      ))}
+
       {/* Tee box */}
       <mesh position={[0, 0.05, teeZ]} receiveShadow>
         <boxGeometry args={[4, 0.1, 3]} />
@@ -121,32 +183,36 @@ export function Hole({
       </mesh>
 
       {/* Putting green */}
-      <mesh
-        rotation={[-Math.PI / 2, 0, 0]}
-        position={[0, 0.02, greenZ]}
-        receiveShadow
-      >
-        <circleGeometry args={[greenRadius, 48]} />
-        <meshStandardMaterial color="#7fd06a" />
-      </mesh>
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.024, greenZ]} receiveShadow>
-        <ringGeometry args={[greenRadius * 0.92, greenRadius * 1.08, 72]} />
-        <meshStandardMaterial color="#5daf52" roughness={0.9} />
-      </mesh>
-      {[0.34, 0.58, 0.78].map((r, index) => (
-        <mesh
-          key={`green-contour-${index}`}
-          rotation={[-Math.PI / 2, 0, 0]}
-          position={[0, 0.028 + index * 0.001, greenZ]}
+      {layout.greenZones.map((zone, zoneIndex) => (
+        <group
+          key={`green-zone-${zoneIndex}`}
+          rotation={[-Math.PI / 2, 0, zone.rot || 0]}
+          position={[zone.x, 0.02 + zoneIndex * 0.001, zone.z]}
         >
-          <ringGeometry args={[greenRadius * r, greenRadius * (r + 0.018), 72]} />
-          <meshStandardMaterial
-            color={index % 2 === 0 ? "#8ddd73" : "#6fc05a"}
-            transparent
-            opacity={0.55}
-            roughness={0.9}
-          />
-        </mesh>
+          <mesh scale={[zone.rx, zone.rz, 1]} receiveShadow>
+            <circleGeometry args={[1, 72]} />
+            <meshStandardMaterial color="#7fd06a" />
+          </mesh>
+          <mesh position={[0, 0, 0.004]} scale={[zone.rx, zone.rz, 1]} receiveShadow>
+            <ringGeometry args={[0.9, 1.03, 72]} />
+            <meshStandardMaterial color="#5daf52" roughness={0.9} />
+          </mesh>
+          {[0.34, 0.58, 0.78].map((r, index) => (
+            <mesh
+              key={`green-contour-${zoneIndex}-${index}`}
+              position={[0, 0, 0.008 + index * 0.001]}
+              scale={[zone.rx, zone.rz, 1]}
+            >
+              <ringGeometry args={[r, r + 0.018, 72]} />
+              <meshStandardMaterial
+                color={index % 2 === 0 ? "#8ddd73" : "#6fc05a"}
+                transparent
+                opacity={0.48}
+                roughness={0.9}
+              />
+            </mesh>
+          ))}
+        </group>
       ))}
 
       {/* Cup */}

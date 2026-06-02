@@ -1,9 +1,12 @@
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Line } from "@react-three/drei";
-import { Fragment, Suspense, forwardRef, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, Suspense, forwardRef, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { Hole } from "./Hole";
 import { Player, type SwingState, type SwingMode } from "./Player";
+import birdsAudioUrl from "./assets/audio/birds.mp3";
+import musicAudioUrl from "./assets/audio/music.mp3";
+import swingAudioUrl from "./assets/audio/swing.mp3";
 import {
   COURSE_HOLES,
   POS,
@@ -27,6 +30,12 @@ const IMPACT_T = 0.42;       // fraction of swing at which ball is struck
 const PUTT_AIM_STEP = 0.007;
 const FULL_AIM_STEP = 0.025;
 const STOP_SPEED = 0.1;
+const BIRDS_VOLUME = 0.45;
+const MUSIC_VOLUME = 0.1;
+const SWING_VOLUME = 0.85;
+const COMMENTARY_VOLUME = 0.82;
+const KOKORO_MODEL_ID = "onnx-community/Kokoro-82M-v1.0-ONNX";
+const KOKORO_VOICE = "af_bella";
 
 type Mode = "idle" | "flight" | "rolling" | "holed";
 type ViewMode = "play" | "overhead";
@@ -312,6 +321,186 @@ type PhoneSyncState = {
 };
 
 type Handedness = "right" | "left";
+
+function GameplayAudio({ onReady }: { onReady: (playSwing: () => void) => void }) {
+  const unlockedRef = useRef(false);
+
+  useEffect(() => {
+    const birds = new Audio(birdsAudioUrl);
+    const music = new Audio(musicAudioUrl);
+    const swing = new Audio(swingAudioUrl);
+    const looped = [birds, music];
+
+    birds.loop = true;
+    birds.volume = BIRDS_VOLUME;
+    music.loop = true;
+    music.volume = MUSIC_VOLUME;
+    swing.volume = SWING_VOLUME;
+    looped.forEach((audio) => {
+      audio.preload = "auto";
+    });
+    swing.preload = "auto";
+
+    const unlock = () => {
+      Promise.all([birds.play(), music.play()])
+        .then(() => {
+          unlockedRef.current = true;
+          window.removeEventListener("pointerdown", unlock);
+          window.removeEventListener("keydown", unlock);
+        })
+        .catch(() => {
+          unlockedRef.current = false;
+        });
+    };
+
+    const startLoops = () => {
+      Promise.all([birds.play(), music.play()])
+        .then(() => {
+          unlockedRef.current = true;
+          window.removeEventListener("pointerdown", unlock);
+          window.removeEventListener("keydown", unlock);
+        })
+        .catch(() => {
+          unlockedRef.current = false;
+        });
+    };
+
+    const installUnlock = () => {
+      if (!unlockedRef.current) {
+        window.addEventListener("pointerdown", unlock, { passive: true });
+        window.addEventListener("keydown", unlock);
+      }
+    };
+
+    onReady(() => {
+      if (!unlockedRef.current) installUnlock();
+      swing.currentTime = 0;
+      void swing.play().catch(() => undefined);
+    });
+
+    installUnlock();
+    startLoops();
+    window.setTimeout(() => {
+      if (!unlockedRef.current) {
+        window.removeEventListener("pointerdown", unlock);
+        window.removeEventListener("keydown", unlock);
+        installUnlock();
+      }
+    }, 250);
+
+    return () => {
+      window.removeEventListener("pointerdown", unlock);
+      window.removeEventListener("keydown", unlock);
+      looped.forEach((audio) => {
+        audio.pause();
+        audio.currentTime = 0;
+      });
+      swing.pause();
+      onReady(() => undefined);
+    };
+  }, [onReady]);
+
+  return null;
+}
+
+function KokoroCommentator({ onReady }: { onReady: (speak: (text: string) => void) => void }) {
+  const ttsRef = useRef<any>(null);
+  const queueRef = useRef<string[]>([]);
+  const loadingRef = useRef(false);
+  const speakingRef = useRef(false);
+  const objectUrlsRef = useRef<string[]>([]);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+
+    const playGeneratedAudio = async (audioBlob: Blob) => {
+      const url = URL.createObjectURL(audioBlob);
+      objectUrlsRef.current.push(url);
+      const audio = new Audio(url);
+      audio.volume = COMMENTARY_VOLUME;
+      await new Promise<void>((resolve) => {
+        audio.onended = () => resolve();
+        audio.onerror = () => resolve();
+        void audio.play().catch(() => resolve());
+      });
+      URL.revokeObjectURL(url);
+      objectUrlsRef.current = objectUrlsRef.current.filter((item) => item !== url);
+    };
+
+    const drainQueue = async () => {
+      if (speakingRef.current || !ttsRef.current || !mountedRef.current) return;
+      speakingRef.current = true;
+      try {
+        while (queueRef.current.length > 0 && mountedRef.current) {
+          const text = queueRef.current.shift();
+          if (!text) continue;
+          const generated = await ttsRef.current.generate(text, {
+            voice: KOKORO_VOICE,
+            speed: 1.05,
+          });
+          await playGeneratedAudio(generated.toBlob());
+        }
+      } catch (err) {
+        console.warn("Kokoro commentary unavailable", err);
+      } finally {
+        speakingRef.current = false;
+      }
+    };
+
+    const loadKokoro = async () => {
+      if (loadingRef.current || ttsRef.current) return;
+      loadingRef.current = true;
+      try {
+        const { KokoroTTS } = await import("kokoro-js");
+        ttsRef.current = await KokoroTTS.from_pretrained(KOKORO_MODEL_ID, {
+          dtype: "q4",
+          device: "wasm",
+        });
+        void drainQueue();
+      } catch (err) {
+        console.warn("Kokoro model failed to load", err);
+      } finally {
+        loadingRef.current = false;
+      }
+    };
+
+    const speak = (rawText: string) => {
+      const text = rawText.replace(/\s+/g, " ").trim().slice(0, 180);
+      if (!text) return;
+      queueRef.current.push(text);
+      if (queueRef.current.length > 4) {
+        queueRef.current.splice(0, queueRef.current.length - 4);
+      }
+      if (ttsRef.current) {
+        void drainQueue();
+      } else {
+        void loadKokoro();
+      }
+    };
+
+    const unlock = () => {
+      void loadKokoro();
+      window.removeEventListener("pointerdown", unlock);
+      window.removeEventListener("keydown", unlock);
+    };
+
+    onReady(speak);
+    window.addEventListener("pointerdown", unlock, { passive: true });
+    window.addEventListener("keydown", unlock);
+
+    return () => {
+      mountedRef.current = false;
+      window.removeEventListener("pointerdown", unlock);
+      window.removeEventListener("keydown", unlock);
+      objectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+      objectUrlsRef.current = [];
+      onReady(() => undefined);
+    };
+  }, [onReady]);
+
+  return null;
+}
 
 type SwingCalibration = {
   handedness: Handedness;
@@ -1386,6 +1575,22 @@ function mapBounds(layout: HoleLayout) {
     maxZ = Math.max(maxZ, bunker.z + bunker.rz + 5);
   }
 
+  for (const water of layout.water) {
+    if (water.kind === "ellipse") {
+      const radius = Math.max(water.rx, water.rz) + 5;
+      minX = Math.min(minX, water.x - radius);
+      maxX = Math.max(maxX, water.x + radius);
+      minZ = Math.min(minZ, water.z - radius);
+      maxZ = Math.max(maxZ, water.z + radius);
+    } else {
+      const radius = Math.hypot(water.w, water.d) / 2 + 5;
+      minX = Math.min(minX, water.x - radius);
+      maxX = Math.max(maxX, water.x + radius);
+      minZ = Math.min(minZ, water.z - radius);
+      maxZ = Math.max(maxZ, water.z + radius);
+    }
+  }
+
   return { minX, maxX, minZ, maxZ };
 }
 
@@ -1439,6 +1644,34 @@ function HoleMapSvg({
         rx={compact ? 10 : 16}
         fill="rgba(255,255,255,0.04)"
       />
+      {layout.water.map((water, index) =>
+        water.kind === "ellipse" ? (
+          <ellipse
+            key={`water-${index}`}
+            cx={mapX(water.x)}
+            cy={mapY(water.z)}
+            rx={water.rx * scale}
+            ry={water.rz * scale}
+            fill="#1c86a3"
+            stroke="#174f61"
+            strokeWidth={compact ? 1.2 : 2.4}
+            transform={`rotate(${-(water.rot || 0) * 180 / Math.PI} ${mapX(water.x)} ${mapY(water.z)})`}
+          />
+        ) : (
+          <rect
+            key={`water-${index}`}
+            x={mapX(water.x) - (water.w * scale) / 2}
+            y={mapY(water.z) - (water.d * scale) / 2}
+            width={water.w * scale}
+            height={water.d * scale}
+            rx={Math.min(water.w * scale * 0.45, compact ? 7 : 14)}
+            fill="#1c86a3"
+            stroke="#174f61"
+            strokeWidth={compact ? 1.2 : 2.4}
+            transform={`rotate(${-(water.rot || 0) * 180 / Math.PI} ${mapX(water.x)} ${mapY(water.z)})`}
+          />
+        ),
+      )}
       {layout.fairways.map((zone, index) =>
         zone.kind === "circle" ? (
           <circle
@@ -1482,14 +1715,19 @@ function HoleMapSvg({
           strokeWidth={compact ? 1 : 2}
         />
       ))}
-      <circle
-        cx={mapX(layout.greenCenter.x)}
-        cy={mapY(layout.greenCenter.z)}
-        r={layout.greenRadius * scale}
-        fill="#7fc766"
-        stroke="#a9e08b"
-        strokeWidth={compact ? 1.5 : 3}
-      />
+      {layout.greenZones.map((zone, index) => (
+        <ellipse
+          key={`green-${index}`}
+          cx={mapX(zone.x)}
+          cy={mapY(zone.z)}
+          rx={zone.rx * scale}
+          ry={zone.rz * scale}
+          fill="#7fc766"
+          stroke="#a9e08b"
+          strokeWidth={compact ? 1.5 : 3}
+          transform={`rotate(${-(zone.rot || 0) * 180 / Math.PI} ${mapX(zone.x)} ${mapY(zone.z)})`}
+        />
+      ))}
       <circle
         cx={mapX(layout.cup.x)}
         cy={mapY(layout.cup.z)}
@@ -2000,6 +2238,7 @@ type GameProps = {
     position: THREE.Vector3,
     strokes: number,
   ) => void;
+  onImpact?: () => void;
 };
 
 function Game(props: GameProps) {
@@ -2026,6 +2265,20 @@ function Game(props: GameProps) {
   const introHoleRef = useRef<number>(-1);
   const introCompleteFiredRef = useRef(false);
   const { camera } = useThree();
+
+  const applyWaterPenalty = () => {
+    const phys = physRef.current;
+    phys.strokes += 1;
+    phys.pos.copy(phys.lastSafe);
+    phys.pos.y = 0.06;
+    phys.vel.set(0, 0, 0);
+    phys.mode = "idle";
+    phys.shape = 0;
+    phys.spin.set(0, 0, 0);
+    const landedSurface = classifySurface(phys.pos, layout);
+    props.aimRef.current = aimToCup(phys.pos, layout);
+    props.onLanded(landedSurface, distToCup(phys.pos, layout), true, phys.pos, phys.strokes);
+  };
 
   const fireShot = (power: number) => {
     const phys = physRef.current;
@@ -2058,6 +2311,7 @@ function Game(props: GameProps) {
     props.shotAttackRef.current = 0;
     phys.mode = club.putter ? "rolling" : "flight";
     phys.strokes += 1;
+    props.onImpact?.();
   };
 
   useFrame((_, dtRaw) => {
@@ -2154,6 +2408,10 @@ function Game(props: GameProps) {
         phys.pos.y = 0.06;
         const club = CLUBS[props.clubIdxRef.current];
         const surf = classifySurface(phys.pos, layout);
+        if (surf === "water") {
+          applyWaterPenalty();
+          return;
+        }
         // Sand plugs the ball: no bounce out, most of the forward speed dies
         // in the sand. The remaining trickle stops fast under bunker friction.
         if (surf === "bunker") {
@@ -2173,7 +2431,7 @@ function Game(props: GameProps) {
         const surfaceGrab =
           surf === "green" ? 1.0 :
           surf === "fairway" ? 0.6 :
-          surf === "water" ? 0.0 : 0.4;
+          0.4;
         // Bite is driven by the spin the ball is actually carrying at impact
         // (decayed through the flight), so a high-spin wedge or crisp chip
         // checks, while a low-spin long shot or a stripped flyer releases.
@@ -2194,6 +2452,10 @@ function Game(props: GameProps) {
       }
     } else if (phys.mode === "rolling") {
       const surf = classifySurface(phys.pos, layout);
+      if (surf === "water") {
+        applyWaterPenalty();
+        return;
+      }
       const friction = ROLL_FRICTION[surf];
       const horizSpeed = Math.hypot(phys.vel.x, phys.vel.z);
       const stopSpeed =
@@ -2773,6 +3035,20 @@ function GolfGame({
   introVisibleRef.current = introVisible;
   const messageTimeoutRef = useRef<number | null>(null);
   const phoneStatePublishQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const playSwingSoundRef = useRef<() => void>(() => undefined);
+  const commentatorSpeakRef = useRef<(text: string) => void>(() => undefined);
+  const handleAudioReady = useCallback((playSwing: () => void) => {
+    playSwingSoundRef.current = playSwing;
+  }, []);
+  const playImpactSound = useCallback(() => {
+    playSwingSoundRef.current();
+  }, []);
+  const handleCommentatorReady = useCallback((speak: (text: string) => void) => {
+    commentatorSpeakRef.current = speak;
+  }, []);
+  const announce = useCallback((text: string) => {
+    commentatorSpeakRef.current(text);
+  }, []);
 
   const publishPhoneState = (state: Partial<PhoneSyncState> = {}) => {
     if (!hostInfo) return;
@@ -2964,6 +3240,9 @@ function GolfGame({
     });
     if (announce) {
       flashMessage(`Hole ${nextLayout.number} · Par ${nextLayout.par}`, 1800);
+      commentatorSpeakRef.current(
+        `Hole ${nextLayout.number}. ${nextLayout.name ?? "Next up"}. Par ${nextLayout.par}.`,
+      );
     }
   };
 
@@ -3055,6 +3334,7 @@ function GolfGame({
     if (nextPlayer) {
       showTurnBanner(nextPlayer.name);
       flashMessage(`${nextPlayer.name} is up`, 2000);
+      announce(`${nextPlayer.name} is away.`);
     }
   };
 
@@ -3129,6 +3409,7 @@ function GolfGame({
   // everyone has sunk, schedule the hole advance.
   useEffect(() => {
     if (!hud.sunk) return;
+    announce(`${currentPlayerRef.current?.name ?? "The player"} holes out in ${hud.strokes}.`);
     setScorecard((prev) => {
       if (prev[holeIndex]) return prev;
       const next = [...prev];
@@ -3161,6 +3442,7 @@ function GolfGame({
     if (!first) return;
     showTurnBanner(first.name);
     flashMessage(`${first.name} is up`, 2000);
+    announce(`${first.name} on the tee.`);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [introVisible, holeIndex]);
 
@@ -3330,10 +3612,19 @@ function GolfGame({
       ball: { x: position.x, z: position.z },
     }));
     publishPhoneState({ clubIdx: idx, distanceMeters: distance, surface });
-    if (penalty) flashMessage("Splash! +1 stroke", 2200);
-    else if (surface === "bunker") flashMessage("In the bunker", 1600);
-    else if (surface === "rough") flashMessage("In the rough", 1200);
-    else if (surface === "green") flashMessage("On the green", 1200);
+    if (penalty) {
+      flashMessage("Splash! +1 stroke", 2200);
+      announce("That one is wet. One stroke penalty.");
+    } else if (surface === "bunker") {
+      flashMessage("In the bunker", 1600);
+      announce("It catches the bunker.");
+    } else if (surface === "rough") {
+      flashMessage("In the rough", 1200);
+      announce("That settles down in the rough.");
+    } else if (surface === "green") {
+      flashMessage("On the green", 1200);
+      announce(`Safely on the green. ${Math.round(distance / 0.9144)} yards left.`);
+    }
     advanceTurnAfterShot({ x: position.x, z: position.z }, strokes, false);
   };
 
@@ -3375,8 +3666,11 @@ function GolfGame({
           playerBuild={currentBuild}
           onState={onState}
           onLanded={onLanded}
+          onImpact={playImpactSound}
         />
       </Canvas>
+      <GameplayAudio onReady={handleAudioReady} />
+      <KokoroCommentator onReady={handleCommentatorReady} />
       <HUD
         club={club}
         clubIdx={hud.clubIdx}

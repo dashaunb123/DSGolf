@@ -13,6 +13,18 @@ export type BunkerZone = {
   rz: number;
 };
 
+export type GreenZone = {
+  x: number;
+  z: number;
+  rx: number;
+  rz: number;
+  rot?: number;
+};
+
+export type WaterZone =
+  | { kind: "ellipse"; x: number; z: number; rx: number; rz: number; rot?: number }
+  | { kind: "rect"; x: number; z: number; w: number; d: number; rot?: number };
+
 export type TreeSpec = { x: number; z: number; scale?: number };
 
 export type HoleSpec = {
@@ -28,6 +40,7 @@ export type HoleSpec = {
   name?: string;
   fairways?: FairwayZone[];
   bunkers?: BunkerZone[];
+  water?: WaterZone[];
   trees?: TreeSpec[];
 };
 
@@ -574,12 +587,97 @@ export const COURSE_HOLES: HoleSpec[] = [
 
 export type HoleLayout = ReturnType<typeof makeHoleLayout>;
 
+const GREEN_SIZE_MULTIPLIER = 1.65;
+
+function makeGreenZones(spec: HoleSpec, greenZ: number, size: number): GreenZone[] {
+  const variant = spec.number % 6;
+
+  if (variant === 1) {
+    return [
+      { x: 0, z: greenZ, rx: size * 1.18, rz: size * 0.86, rot: 0.18 },
+      { x: -size * 0.5, z: greenZ + size * 0.15, rx: size * 0.58, rz: size * 0.52, rot: -0.35 },
+    ];
+  }
+
+  if (variant === 2) {
+    return [
+      { x: 0, z: greenZ, rx: size * 0.95, rz: size * 1.22, rot: -0.12 },
+      { x: size * 0.55, z: greenZ - size * 0.2, rx: size * 0.55, rz: size * 0.6, rot: 0.4 },
+    ];
+  }
+
+  if (variant === 3) {
+    return [
+      { x: -size * 0.28, z: greenZ + size * 0.1, rx: size * 0.82, rz: size * 0.92, rot: 0.35 },
+      { x: size * 0.48, z: greenZ - size * 0.18, rx: size * 0.78, rz: size * 0.72, rot: -0.25 },
+    ];
+  }
+
+  if (variant === 4) {
+    return [
+      { x: 0, z: greenZ, rx: size * 1.3, rz: size * 0.82, rot: -0.42 },
+      { x: size * 0.28, z: greenZ + size * 0.45, rx: size * 0.48, rz: size * 0.48, rot: 0 },
+    ];
+  }
+
+  if (variant === 5) {
+    return [
+      { x: 0, z: greenZ, rx: size * 0.78, rz: size * 1.32, rot: 0.32 },
+      { x: -size * 0.48, z: greenZ - size * 0.38, rx: size * 0.52, rz: size * 0.5, rot: 0 },
+      { x: size * 0.45, z: greenZ + size * 0.34, rx: size * 0.5, rz: size * 0.48, rot: 0 },
+    ];
+  }
+
+  return [
+    { x: 0, z: greenZ, rx: size * 1.08, rz: size * 1.0, rot: 0 },
+    { x: size * 0.52, z: greenZ, rx: size * 0.55, rz: size * 0.7, rot: -0.2 },
+  ];
+}
+
+function greenBoundsRadius(greenCenterZ: number, greenZones: GreenZone[]) {
+  return greenZones.reduce(
+    (radius, zone) =>
+      Math.max(radius, Math.hypot(zone.x, zone.z - greenCenterZ) + Math.max(zone.rx, zone.rz)),
+    0,
+  );
+}
+
+function makeWaterZones(spec: HoleSpec, greenZ: number, greenRadius: number): WaterZone[] {
+  if (spec.water) return spec.water;
+
+  switch (spec.number) {
+    case 4:
+      return [{ kind: "ellipse", x: 0, z: greenZ, rx: greenRadius + 13, rz: greenRadius + 10 }];
+    case 8:
+      return [
+        { kind: "rect", x: 5, z: -50, w: 16, d: 74, rot: -0.34 },
+        { kind: "ellipse", x: -8, z: -88, rx: 13, rz: 10, rot: 0.2 },
+      ];
+    case 11:
+      return [
+        { kind: "rect", x: -26, z: 32, w: 28, d: 250, rot: -0.03 },
+        { kind: "ellipse", x: -18, z: greenZ, rx: 22, rz: greenRadius + 12, rot: 0.15 },
+      ];
+    case 15:
+      return [{ kind: "rect", x: 0, z: -118, w: 42, d: 22, rot: 0.1 }];
+    case 18:
+      return [
+        { kind: "ellipse", x: 9, z: greenZ + 3, rx: greenRadius + 14, rz: greenRadius + 10, rot: -0.08 },
+        { kind: "rect", x: 21, z: -150, w: 22, d: 118, rot: 0.1 },
+      ];
+    default:
+      return [];
+  }
+}
+
 export function makeHoleLayout(spec: HoleSpec) {
   const length = spec.yardage * yd;
   const halfLen = length / 2;
   const greenZ = -halfLen + spec.greenRadius + 1;
+  const greenZones = makeGreenZones(spec, greenZ, spec.greenRadius * GREEN_SIZE_MULTIPLIER);
+  const greenRadius = greenBoundsRadius(greenZ, greenZones);
   const defaultBunker = {
-    x: spec.bunkerSide * (spec.greenRadius + 1.2),
+    x: spec.bunkerSide * (greenRadius + 1.2),
     z: greenZ + spec.bunkerForward,
     rx: 2.4,
     rz: 2.4,
@@ -590,6 +688,7 @@ export function makeHoleLayout(spec: HoleSpec) {
 
   const fairways: FairwayZone[] = spec.fairways ?? defaultFairways;
   const bunkers: BunkerZone[] = spec.bunkers ?? [defaultBunker];
+  const water = makeWaterZones(spec, greenZ, greenRadius);
 
   return {
     ...spec,
@@ -601,8 +700,11 @@ export function makeHoleLayout(spec: HoleSpec) {
     cup: new THREE.Vector3(spec.cupOffsetX, 0, greenZ + spec.cupOffsetZ),
     cupRadius: 0.14,
     greenCenter: new THREE.Vector3(0, 0, greenZ),
+    greenRadius,
+    greenZones,
     fairways,
     bunkers,
+    water,
     trees: spec.trees ?? [],
     bunkerCenter: new THREE.Vector3(defaultBunker.x, 0, defaultBunker.z),
     bunkerRadius: Math.max(defaultBunker.rx, defaultBunker.rz),
@@ -677,6 +779,22 @@ function pointInFairwayRoute(p: THREE.Vector3, fairways: FairwayZone[]) {
   return false;
 }
 
+function pointInRotatedEllipse(p: THREE.Vector3, zone: GreenZone | Extract<WaterZone, { kind: "ellipse" }>) {
+  const rot = zone.rot || 0;
+  const dx = p.x - zone.x;
+  const dz = p.z - zone.z;
+  const c = Math.cos(-rot);
+  const s = Math.sin(-rot);
+  const lx = dx * c - dz * s;
+  const lz = dx * s + dz * c;
+  return (lx * lx) / (zone.rx * zone.rx) + (lz * lz) / (zone.rz * zone.rz) <= 1;
+}
+
+function pointInWaterZone(p: THREE.Vector3, zone: WaterZone) {
+  if (zone.kind === "ellipse") return pointInRotatedEllipse(p, zone);
+  return pointInRotatedFairwayRect(p, zone, zone.rot || 0);
+}
+
 export function classifySurface(p: THREE.Vector3, hole: HoleLayout = POS): Surface {
   for (const bunker of hole.bunkers) {
     const dx = (p.x - bunker.x) / bunker.rx;
@@ -684,10 +802,11 @@ export function classifySurface(p: THREE.Vector3, hole: HoleLayout = POS): Surfa
     if (dx * dx + dz * dz < 1) return "bunker";
   }
 
-  const dg = Math.hypot(p.x - hole.greenCenter.x, p.z - hole.greenCenter.z);
-  if (dg < hole.greenRadius) return "green";
+  if (hole.greenZones.some((zone) => pointInRotatedEllipse(p, zone))) return "green";
 
   if (Math.abs(p.x) < 2 && Math.abs(p.z - hole.teeZ) < 1.5) return "tee";
+
+  if (hole.water.some((zone) => pointInWaterZone(p, zone))) return "water";
 
   if (hole.fairways.some((zone) => pointInFairwayZone(p, zone)) || pointInFairwayRoute(p, hole.fairways)) {
     return "fairway";
