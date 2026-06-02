@@ -23,6 +23,13 @@ import {
   clubSpinVector,
   simulateFlight,
 } from "./clubs";
+import {
+  generateLine,
+  line,
+  loadTts,
+  normalizeLine,
+  prewarmLines,
+} from "./tts";
 
 const CHARGE_DURATION = 1.0; // seconds to fill power 0 → 1
 const SWING_DURATION = 0.55; // seconds the whole swing animation lasts
@@ -34,12 +41,10 @@ const BIRDS_VOLUME = 0.45;
 const MUSIC_VOLUME = 0.1;
 const SWING_VOLUME = 0.85;
 const COMMENTARY_VOLUME = 0.82;
-const KOKORO_MODEL_ID = "onnx-community/Kokoro-82M-v1.0-ONNX";
-const KOKORO_VOICE = "am_michael";
 
 type Mode = "idle" | "flight" | "rolling" | "holed";
 type ViewMode = "play" | "overhead";
-type ScreenMode = "menu" | "lobby" | "playing" | "controller";
+type ScreenMode = "menu" | "lobby" | "loading" | "playing" | "controller";
 
 type ScoreEntry = {
   strokes: number;
@@ -404,9 +409,7 @@ function GameplayAudio({ onReady }: { onReady: (playSwing: () => void) => void }
 }
 
 function KokoroCommentator({ onReady }: { onReady: (speak: (text: string) => void) => void }) {
-  const ttsRef = useRef<any>(null);
   const queueRef = useRef<string[]>([]);
-  const loadingRef = useRef(false);
   const speakingRef = useRef(false);
   const objectUrlsRef = useRef<string[]>([]);
   const mountedRef = useRef(true);
@@ -429,17 +432,17 @@ function KokoroCommentator({ onReady }: { onReady: (speak: (text: string) => voi
     };
 
     const drainQueue = async () => {
-      if (speakingRef.current || !ttsRef.current || !mountedRef.current) return;
+      if (speakingRef.current || !mountedRef.current) return;
       speakingRef.current = true;
       try {
         while (queueRef.current.length > 0 && mountedRef.current) {
           const text = queueRef.current.shift();
           if (!text) continue;
-          const generated = await ttsRef.current.generate(text, {
-            voice: KOKORO_VOICE,
-            speed: 1.15,
-          });
-          await playGeneratedAudio(generated.toBlob());
+          // Lines are pre-generated on the loading screen, so this is almost
+          // always an instant cache hit; generateLine falls back to on-the-fly
+          // synthesis only for the rare line that wasn't preloaded.
+          const blob = await generateLine(text);
+          if (blob && mountedRef.current) await playGeneratedAudio(blob);
         }
       } catch (err) {
         console.warn("Kokoro commentary unavailable", err);
@@ -448,80 +451,20 @@ function KokoroCommentator({ onReady }: { onReady: (speak: (text: string) => voi
       }
     };
 
-    const loadKokoro = async () => {
-      if (loadingRef.current || ttsRef.current) return;
-      loadingRef.current = true;
-      try {
-        const { KokoroTTS } = await import("kokoro-js");
-        // WebGPU is dramatically faster than wasm/CPU for generation; fall
-        // back to wasm when it isn't available so commentary still works.
-        const hasWebGPU = typeof navigator !== "undefined" && "gpu" in navigator;
-        if (hasWebGPU) {
-          try {
-            ttsRef.current = await KokoroTTS.from_pretrained(KOKORO_MODEL_ID, {
-              dtype: "fp32",
-              device: "webgpu",
-            });
-          } catch (gpuErr) {
-            console.warn("Kokoro WebGPU unavailable, falling back to wasm", gpuErr);
-          }
-        }
-        if (!ttsRef.current) {
-          ttsRef.current = await KokoroTTS.from_pretrained(KOKORO_MODEL_ID, {
-            dtype: "q4",
-            device: "wasm",
-          });
-        }
-        // Cold-start: the first generate() compiles shaders / optimizes the
-        // graph and is far slower than later calls. Pay that once on a
-        // throwaway phrase during load/idle (when nothing is queued) so the
-        // first real commentary line plays without that delay.
-        if (mountedRef.current && queueRef.current.length === 0) {
-          try {
-            await ttsRef.current.generate("Welcome to the course.", {
-              voice: KOKORO_VOICE,
-              speed: 1.15,
-            });
-          } catch {
-            /* warmup is best-effort */
-          }
-        }
-        void drainQueue();
-      } catch (err) {
-        console.warn("Kokoro model failed to load", err);
-      } finally {
-        loadingRef.current = false;
-      }
-    };
-
     const speak = (rawText: string) => {
-      const text = rawText.replace(/\s+/g, " ").trim().slice(0, 180);
+      const text = normalizeLine(rawText);
       if (!text) return;
       queueRef.current.push(text);
       if (queueRef.current.length > 4) {
         queueRef.current.splice(0, queueRef.current.length - 4);
       }
-      if (ttsRef.current) {
-        void drainQueue();
-      } else {
-        void loadKokoro();
-      }
-    };
-
-    const unlock = () => {
-      void loadKokoro();
-      window.removeEventListener("pointerdown", unlock);
-      window.removeEventListener("keydown", unlock);
+      void drainQueue();
     };
 
     onReady(speak);
-    window.addEventListener("pointerdown", unlock, { passive: true });
-    window.addEventListener("keydown", unlock);
 
     return () => {
       mountedRef.current = false;
-      window.removeEventListener("pointerdown", unlock);
-      window.removeEventListener("keydown", unlock);
       objectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
       objectUrlsRef.current = [];
       onReady(() => undefined);
@@ -3270,7 +3213,7 @@ function GolfGame({
     if (announce) {
       flashMessage(`Hole ${nextLayout.number} · Par ${nextLayout.par}`, 1800);
       commentatorSpeakRef.current(
-        `Hole ${nextLayout.number}. ${nextLayout.name ?? "Next up"}. Par ${nextLayout.par}.`,
+        line.holeIntro(nextLayout.number, nextLayout.name, nextLayout.par),
       );
     }
   };
@@ -3363,7 +3306,7 @@ function GolfGame({
     if (nextPlayer) {
       showTurnBanner(nextPlayer.name);
       flashMessage(`${nextPlayer.name} is up`, 2000);
-      announce(`${nextPlayer.name} is away.`);
+      announce(line.away(nextPlayer.name));
     }
   };
 
@@ -3438,7 +3381,7 @@ function GolfGame({
   // everyone has sunk, schedule the hole advance.
   useEffect(() => {
     if (!hud.sunk) return;
-    announce(`${currentPlayerRef.current?.name ?? "The player"} holes out in ${hud.strokes}.`);
+    announce(line.holesOut(currentPlayerRef.current?.name ?? "The player", hud.strokes));
     setScorecard((prev) => {
       if (prev[holeIndex]) return prev;
       const next = [...prev];
@@ -3471,7 +3414,7 @@ function GolfGame({
     if (!first) return;
     showTurnBanner(first.name);
     flashMessage(`${first.name} is up`, 2000);
-    announce(`${first.name} on the tee.`);
+    announce(line.onTee(first.name));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [introVisible, holeIndex]);
 
@@ -3643,16 +3586,16 @@ function GolfGame({
     publishPhoneState({ clubIdx: idx, distanceMeters: distance, surface });
     if (penalty) {
       flashMessage("Splash! +1 stroke", 2200);
-      announce("That one is wet. One stroke penalty.");
+      announce(line.wet);
     } else if (surface === "bunker") {
       flashMessage("In the bunker", 1600);
-      announce("It catches the bunker.");
+      announce(line.bunker);
     } else if (surface === "rough") {
       flashMessage("In the rough", 1200);
-      announce("That settles down in the rough.");
+      announce(line.rough);
     } else if (surface === "green") {
       flashMessage("On the green", 1200);
-      announce(`Safely on the green. ${Math.round(distance / 0.9144)} yards left.`);
+      announce(line.onGreen(Math.round(distance / 0.9144)));
     }
     advanceTurnAfterShot({ x: position.x, z: position.z }, strokes, false);
   };
@@ -4600,6 +4543,200 @@ function HUD({
   );
 }
 
+// Every commentary line that can be spoken during a round, given the roster.
+// Pre-generating this whole set on the loading screen means the in-game
+// commentator only ever plays cached audio — no synthesis latency mid-shot.
+function buildRoundCommentaryLines(players: GolfPlayer[]): string[] {
+  const lines: string[] = [];
+  for (const hole of COURSE_HOLES) {
+    lines.push(line.holeIntro(hole.number, hole.name, hole.par));
+  }
+  const names = new Set<string>(players.map((p) => p.name || "Player"));
+  // Fallback name used when the current player record is momentarily missing.
+  names.add("The player");
+  for (const name of names) {
+    lines.push(line.away(name));
+    lines.push(line.onTee(name));
+    for (let strokes = 1; strokes <= 12; strokes++) {
+      lines.push(line.holesOut(name, strokes));
+    }
+  }
+  lines.push(line.wet, line.bunker, line.rough);
+  // "Safely on the green. N yards left." — greens are small, but cover a
+  // generous range so the exact rounded yardage is always a cache hit.
+  for (let yards = 0; yards <= 60; yards++) {
+    lines.push(line.onGreen(yards));
+  }
+  return lines;
+}
+
+// Full-screen startup loader: plays the course music, dances a penguin, and
+// runs the heavy preflight (TTS model + every commentary line) behind a
+// progress bar so the round itself runs perfectly smoothly.
+function LoadingScreen({ players, onDone }: { players: GolfPlayer[]; onDone: () => void }) {
+  const [pct, setPct] = useState(0);
+  const [label, setLabel] = useState("Warming up the booth…");
+  const doneRef = useRef(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    const music = new Audio(musicAudioUrl);
+    music.loop = true;
+    music.volume = MUSIC_VOLUME;
+    // We arrived here from a click (Start / Play), so autoplay is allowed.
+    void music.play().catch(() => undefined);
+
+    const run = async () => {
+      try {
+        setLabel("Loading the commentary booth…");
+        // Model download + init drives the first 40% of the bar.
+        await loadTts((frac) => {
+          if (!cancelled) setPct(Math.round(frac * 40));
+        });
+        if (cancelled) return;
+        setPct(40);
+        setLabel("Pre-recording every call…");
+        const lines = buildRoundCommentaryLines(players);
+        await prewarmLines(lines, (frac) => {
+          if (!cancelled) setPct(40 + Math.round(frac * 60));
+        });
+      } catch (err) {
+        // Even if preflight fails we still let the player in; commentary then
+        // falls back to on-the-fly synthesis.
+        console.warn("Loading preflight failed", err);
+      } finally {
+        if (!cancelled) {
+          setPct(100);
+          setLabel("Teeing off!");
+          // Brief beat so the bar visibly fills before we hand off.
+          window.setTimeout(() => {
+            if (!cancelled && !doneRef.current) {
+              doneRef.current = true;
+              onDone();
+            }
+          }, 400);
+        }
+      }
+    };
+    void run();
+
+    return () => {
+      cancelled = true;
+      music.pause();
+      music.currentTime = 0;
+    };
+  }, [players, onDone]);
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 1000,
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 28,
+        background:
+          "radial-gradient(120% 120% at 50% 0%, #7fc7ff 0%, #4a90d9 38%, #1e3a5f 100%)",
+        fontFamily: "-apple-system, system-ui, sans-serif",
+        color: "white",
+        userSelect: "none",
+      }}
+    >
+      <style>{`
+        @keyframes dsgDance {
+          0%   { transform: translateY(0) rotate(-5deg); }
+          25%  { transform: translateY(-14px) rotate(5deg); }
+          50%  { transform: translateY(0) rotate(-5deg); }
+          75%  { transform: translateY(-14px) rotate(5deg); }
+          100% { transform: translateY(0) rotate(-5deg); }
+        }
+        @keyframes dsgWingL {
+          0%,100% { transform: rotate(18deg); }
+          50%     { transform: rotate(-30deg); }
+        }
+        @keyframes dsgWingR {
+          0%,100% { transform: rotate(-18deg); }
+          50%     { transform: rotate(30deg); }
+        }
+        @keyframes dsgShadow {
+          0%,50%,100% { transform: scaleX(1); opacity: 0.35; }
+          25%,75%     { transform: scaleX(0.7); opacity: 0.2; }
+        }
+        @keyframes dsgFeet {
+          0%,100% { transform: translateX(0); }
+          25%     { transform: translateX(-4px); }
+          75%     { transform: translateX(4px); }
+        }
+        .dsg-penguin { animation: dsgDance 0.9s ease-in-out infinite; transform-origin: 50% 100%; }
+        .dsg-wing-l { animation: dsgWingL 0.45s ease-in-out infinite; transform-origin: 100% 0%; transform-box: fill-box; }
+        .dsg-wing-r { animation: dsgWingR 0.45s ease-in-out infinite; transform-origin: 0% 0%; transform-box: fill-box; }
+        .dsg-feet   { animation: dsgFeet 0.9s ease-in-out infinite; transform-box: fill-box; }
+        .dsg-shadow { animation: dsgShadow 0.9s ease-in-out infinite; transform-origin: 50% 50%; }
+      `}</style>
+
+      <div style={{ position: "relative", width: 200, height: 220 }}>
+        <svg viewBox="0 0 200 220" width="200" height="220">
+          <ellipse className="dsg-shadow" cx="100" cy="208" rx="52" ry="10" fill="#0d2138" />
+          <g className="dsg-penguin">
+            {/* feet */}
+            <g className="dsg-feet">
+              <ellipse cx="82" cy="196" rx="16" ry="8" fill="#ff9d2e" />
+              <ellipse cx="118" cy="196" rx="16" ry="8" fill="#ff9d2e" />
+            </g>
+            {/* body */}
+            <ellipse cx="100" cy="120" rx="58" ry="74" fill="#1b1b22" />
+            {/* belly */}
+            <ellipse cx="100" cy="132" rx="40" ry="58" fill="#f6f7fb" />
+            {/* wings */}
+            <path className="dsg-wing-l" d="M44 92 q-22 30 -6 70 q14 -10 18 -44 z" fill="#16161c" />
+            <path className="dsg-wing-r" d="M156 92 q22 30 6 70 q-14 -10 -18 -44 z" fill="#16161c" />
+            {/* eyes */}
+            <circle cx="84" cy="86" r="9" fill="#fff" />
+            <circle cx="116" cy="86" r="9" fill="#fff" />
+            <circle cx="86" cy="88" r="4.5" fill="#1b1b22" />
+            <circle cx="114" cy="88" r="4.5" fill="#1b1b22" />
+            {/* beak */}
+            <path d="M92 100 l16 0 l-8 12 z" fill="#ff9d2e" />
+          </g>
+        </svg>
+      </div>
+
+      <div style={{ textAlign: "center" }}>
+        <div style={{ fontSize: 26, fontWeight: 800, letterSpacing: 1 }}>Loading the Course</div>
+        <div style={{ fontSize: 14, opacity: 0.85, marginTop: 6, minHeight: 18 }}>{label}</div>
+      </div>
+
+      <div style={{ width: "min(420px, 76vw)" }}>
+        <div
+          style={{
+            height: 14,
+            borderRadius: 999,
+            background: "rgba(255,255,255,0.22)",
+            overflow: "hidden",
+            boxShadow: "inset 0 1px 3px rgba(0,0,0,0.35)",
+          }}
+        >
+          <div
+            style={{
+              height: "100%",
+              width: `${pct}%`,
+              borderRadius: 999,
+              background: "linear-gradient(90deg, #ffd166, #ff9d2e)",
+              transition: "width 0.25s ease",
+            }}
+          />
+        </div>
+        <div style={{ textAlign: "center", marginTop: 8, fontSize: 13, fontWeight: 700, opacity: 0.9 }}>
+          {pct}%
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function App({ onExitToMenu }: { onExitToMenu?: () => void } = {}) {
   const params = new URLSearchParams(window.location.search);
   const startAsController = params.get("controller") === "1";
@@ -4663,9 +4800,16 @@ export function App({ onExitToMenu }: { onExitToMenu?: () => void } = {}) {
   const startSolo = () => {
     setHostInfo(null);
     setPlayers([defaultPlayer(0, "local", "solo")]);
-    setMode("playing");
+    setMode("loading");
   };
 
+  if (mode === "loading")
+    return (
+      <>
+        {exitButton}
+        <LoadingScreen players={players} onDone={() => setMode("playing")} />
+      </>
+    );
   if (mode === "playing")
     return (
       <>
@@ -4688,7 +4832,7 @@ export function App({ onExitToMenu }: { onExitToMenu?: () => void } = {}) {
           setPlayers={setPlayers}
           gameSettings={gameSettings}
           onGameSettingsChange={(patch) => setGameSettings((prev) => ({ ...prev, ...patch }))}
-          onStart={() => setMode("playing")}
+          onStart={() => setMode("loading")}
           onCancel={() => {
             setHostInfo(null);
             setPlayers([]);
