@@ -333,6 +333,17 @@ type SwingPathFeedback = {
    * Magnus-like in-flight curve.
    */
   shape: number;
+  /**
+   * Face angle at impact, radians (signed like shape). Sets the ball's START
+   * line — it launches toward the face. Curve (shape) is the gap between path
+   * and face: face square to path = straight, open = fade, closed = draw.
+   */
+  face: number;
+  /**
+   * Attack angle, radians. Positive = hitting up (higher launch, less spin),
+   * negative = hitting down (compression: lower launch, more spin).
+   */
+  attack: number;
 };
 
 type ControllerAction =
@@ -703,7 +714,7 @@ function computeTargetPathMetrics(
   projected: Array<{ along: number; side: number; up: number; mag: number }>,
 ) {
   if (projected.length < 2) {
-    return { sideRatio: 0, pathAngle: 0, sideBias: 0 };
+    return { sideRatio: 0, pathAngle: 0, sideBias: 0, faceAngle: 0 };
   }
   let sideEnergy = 0;
   let targetPlaneEnergy = 0;
@@ -718,6 +729,12 @@ function computeTargetPathMetrics(
   }
   const sideRatio = Math.sqrt(sideEnergy / Math.max(targetPlaneEnergy, 1e-4));
   const sideBias = weightedSide / Math.max(weightTotal, 1e-4);
+  // Face proxy: the steady lateral lean of the whole swing, expressed as an
+  // angle against the swing's forward energy. Independent of pathAngle (which
+  // is the downswing direction), so the two together give a real D-plane:
+  // start line ≈ face, curve ≈ path − face.
+  const alongScale = Math.sqrt(targetPlaneEnergy / Math.max(weightTotal, 1e-4));
+  const faceAngle = Math.atan2(sideBias, Math.max(alongScale, 1e-3));
   const half = Math.floor(projected.length / 2);
   const downswing = projected.slice(half);
   let along = 0;
@@ -732,7 +749,7 @@ function computeTargetPathMetrics(
   along /= Math.max(total, 1e-4);
   side /= Math.max(total, 1e-4);
   const pathAngle = Math.atan2(side, Math.max(Math.abs(along), 1e-3));
-  return { sideRatio, pathAngle, sideBias };
+  return { sideRatio, pathAngle, sideBias, faceAngle };
 }
 
 function integratedRotation(gyroSamples: GyroSample[]) {
@@ -1950,6 +1967,8 @@ type GameProps = {
   shotShapeRef: React.MutableRefObject<number>;
   /** Strike-quality spin multiplier for the next shot (1 = flush). */
   shotSpinQualityRef: React.MutableRefObject<number>;
+  /** Attack angle (radians) for the next shot. + = hitting up, − = down. */
+  shotAttackRef: React.MutableRefObject<number>;
   clubIdxRef: React.MutableRefObject<number>;
   chargeStartRef: React.MutableRefObject<number | null>;
   pendingShotRef: React.MutableRefObject<boolean>;
@@ -2018,9 +2037,10 @@ function Game(props: GameProps) {
     );
     const shotAim = props.aimRef.current + props.shotAimOffsetRef.current;
     const chip = isChipShot(baseClub, distToCup(phys.pos, layout), surface);
+    const attack = club.putter ? 0 : props.shotAttackRef.current;
     phys.lastSafe.copy(phys.pos);
     phys.lastSafe.y = 0.06;
-    phys.vel.copy(clubInitialVelocity(club, power, shotAim, { chip }));
+    phys.vel.copy(clubInitialVelocity(club, power, shotAim, { chip, attack }));
     // Capture shot shape for this flight — putters don't curve.
     phys.shape = club.putter ? 0 : props.shotShapeRef.current;
     // Spin is set by strike quality and the lie: a crisp strike off clean turf
@@ -2031,10 +2051,11 @@ function Game(props: GameProps) {
       surface === "bunker" ? 0.5 :
       1;
     const spinScale = THREE.MathUtils.clamp(props.shotSpinQualityRef.current * lieSpin, 0.25, 1.15);
-    phys.spin.copy(clubSpinVector(club, shotAim, phys.shape, spinScale));
+    phys.spin.copy(clubSpinVector(club, shotAim, phys.shape, spinScale, attack));
     props.shotAimOffsetRef.current = 0;
     props.shotShapeRef.current = 0;
     props.shotSpinQualityRef.current = 1;
+    props.shotAttackRef.current = 0;
     phys.mode = club.putter ? "rolling" : "flight";
     phys.strokes += 1;
   };
@@ -2730,6 +2751,7 @@ function GolfGame({
   const shotAimOffsetRef = useRef(0);
   const shotShapeRef = useRef(0);
   const shotSpinQualityRef = useRef(1);
+  const shotAttackRef = useRef(0);
   const clubIdxRef = useRef(suggestClubForBuild(distToCup(layout.tee, layout), false, openingPlayer, "tee"));
   const chargeStartRef = useRef<number | null>(null);
   const pendingShotRef = useRef(false);
@@ -2824,6 +2846,8 @@ function GolfGame({
     pathQuality = 1,
     label = "",
     shape = 0,
+    face = 0,
+    attack = 0,
   ) => {
     if (introVisibleRef.current) return;
     if (hudRef.current.mode !== "idle" || hudRef.current.sunk) return;
@@ -2835,13 +2859,19 @@ function GolfGame({
     const quality = THREE.MathUtils.clamp(pathQuality, 0, 1);
     const maxMiss = putting ? 0.16 : 0.34;
     const miss = THREE.MathUtils.clamp(pathError * pathMissFactor(build) * liePenalty, -maxMiss, maxMiss);
+    // The ball starts toward where the face points (D-plane start line), added
+    // on top of any quality miss. FACE_START_GAIN is the felt-strength knob.
+    const faceStart = putting ? 0 : THREE.MathUtils.clamp(face * 0.8 * liePenalty, -0.3, 0.3);
     const p = putting
       ? THREE.MathUtils.clamp(power, 0.05, 1)
       : THREE.MathUtils.clamp(power * THREE.MathUtils.lerp(0.82, 1, quality), 0.05, 1);
-    shotAimOffsetRef.current = miss;
+    shotAimOffsetRef.current = THREE.MathUtils.clamp(miss + faceStart, -0.45, 0.45);
     // Cap shape so a wild reading can't produce a hook around the whole
     // map. Putters are flat-rolling — no curve.
     shotShapeRef.current = putting ? 0 : THREE.MathUtils.clamp(shape * controlShapeFactor(build) * liePenalty, -0.45, 0.45);
+    // Attack angle drives launch height + spin in clubs.ts (up = higher/less
+    // spin, down = lower/compressed). Off turf you can't control it as well.
+    shotAttackRef.current = putting ? 0 : THREE.MathUtils.clamp(attack / Math.max(liePenalty, 1), -0.18, 0.18);
     // A crisp strike spins up (checks); a thin one spins down (releases).
     shotSpinQualityRef.current = putting ? 1 : THREE.MathUtils.lerp(0.6, 1.1, quality);
     if (label) {
@@ -2880,6 +2910,8 @@ function GolfGame({
         action.pathQuality ?? 1,
         action.label ?? "",
         action.shape ?? 0,
+        action.face ?? 0,
+        action.attack ?? 0,
       );
     }
   };
@@ -3323,6 +3355,7 @@ function GolfGame({
           shotAimOffsetRef={shotAimOffsetRef}
           shotShapeRef={shotShapeRef}
           shotSpinQualityRef={shotSpinQualityRef}
+          shotAttackRef={shotAttackRef}
           clubIdxRef={clubIdxRef}
           chargeStartRef={chargeStartRef}
           pendingShotRef={pendingShotRef}
@@ -5901,17 +5934,35 @@ function PhoneController({ onBack }: { onBack: () => void }) {
       ? THREE.MathUtils.clamp((1 - wobbleSeverity * 0.7) * (realisticSwing ? realism?.qualityCap ?? 1 : 1), 0.08, 1)
       : 1;
 
-    // ── Shape: signed curve of the swing in the horizontal plane ──
+    // ── D-plane: the face sets the START line; the curve is (path − face) ──
+    // Face square to path flies straight even on an out-to-in path (it just
+    // starts offline). Open face vs path = fade, closed = draw.
+    const handed = state.calibration?.handedness === "right" ? -1 : 1;
+    const calibratedFace =
+      realMotion && state.calibration ? handed * targetMetrics.faceAngle : 0;
     const calibratedShape =
-      realMotion && state.calibration
-        ? (state.calibration.handedness === "right"
-            ? -targetMetrics.pathAngle
-            : targetMetrics.pathAngle)
-        : null;
+      realMotion && state.calibration ? handed * targetMetrics.pathAngle : null;
     const rawShape = realMotion
-      ? calibratedShape ?? computeShapeAngle(state.pathVectors, state.gravity, pca.axis)
+      ? (calibratedShape !== null
+          ? calibratedShape - calibratedFace
+          : computeShapeAngle(state.pathVectors, state.gravity, pca.axis))
       : 0;
     const shape = compressShapeAngle(rawShape);
+    // Start-line offset toward where the face points (small, signed like shape).
+    const face = realMotion ? compressShapeAngle(calibratedFace) : 0;
+
+    // ── Attack angle: vertical vs horizontal travel at the fastest (impact)
+    // point of the swing. Up (>0) = hitting up (driver wants this); down (<0)
+    // = ball-first compression (irons). ──
+    const attack = (() => {
+      if (!realMotion) return 0;
+      const vtrack = reconstructSwingVelocity(projected);
+      let best: { along: number; side: number; up: number; speed: number } | null = null;
+      for (const v of vtrack) if (!best || v.speed > best.speed) best = v;
+      if (!best) return 0;
+      const horiz = Math.hypot(best.along, best.side);
+      return THREE.MathUtils.clamp(Math.atan2(best.up, Math.max(horiz, 1e-3)), -0.18, 0.18);
+    })();
 
     // ── Path miss: launch direction is now measured against the calibrated
     // target line, not against the swing's self-selected PCA axis.
@@ -6033,6 +6084,8 @@ function PhoneController({ onBack }: { onBack: () => void }) {
         pathError: realMotion ? pathError : 0,
         pathQuality: realMotion ? pathQuality : 1,
         shape: realMotion ? shape : 0,
+        face: realMotion ? face : 0,
+        attack: realMotion ? attack : 0,
         label: realMotion ? label : "Fallback swing",
       });
     }

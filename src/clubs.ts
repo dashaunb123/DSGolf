@@ -23,18 +23,24 @@ const CL_MAX = 0.3;
 const SPIN_DECAY = 0.04;
 /** Fraction of a club's spin redirected into sidespin per radian of shape. */
 const SIDE_SPIN_FRACTION = 0.6;
+/** Attack angle (rad) → launch & spin. Hitting up (attack>0) launches the ball
+ *  higher and spins it less; hitting down compresses it (lower, more spin). */
+const ATTACK_LAUNCH_GAIN = 0.55;
+const ATTACK_SPIN_GAIN = 1.0;
 
 /**
  * Real launch angle is well below the club's face loft — a 56° wedge launches
  * around 32°, not 55° — because the shaft leans forward at impact. Without
  * this, lofted clubs fire nearly straight up and balloon.
  */
-function launchAngleFor(loft: number, chip = false): number {
+function launchAngleFor(loft: number, chip = false, attack = 0): number {
   // A chip/pitch is played with an open face and a steep descent so it lobs
   // up high and lands soft on the green — much higher than the delofted full
   // swing. Capped at ~57° so it stays high without looping straight up.
   if (chip) return Math.min(1.0, loft + 0.15);
-  return Math.min(loft, 0.2 + loft * 0.42);
+  const base = Math.min(loft, 0.2 + loft * 0.42);
+  // A positive attack angle (hitting up) raises launch; negative lowers it.
+  return THREE.MathUtils.clamp(base + attack * ATTACK_LAUNCH_GAIN, 0.05, 1.25);
 }
 
 export type Club = {
@@ -132,9 +138,11 @@ export function aeroStep(
  * `spinScale` lets a crisp strike spin up and a thin strike / bad lie spin
  * down (a flyer), which feeds both the in-air lift and the landing bite.
  */
-export function clubSpinVector(club: Club, aimRad: number, shape = 0, spinScale = 1): THREE.Vector3 {
+export function clubSpinVector(club: Club, aimRad: number, shape = 0, spinScale = 1, attack = 0): THREE.Vector3 {
   if (club.putter) return new THREE.Vector3();
-  const omega = ((club.spinRpm * 2 * Math.PI) / 60) * Math.max(0, spinScale);
+  // Hitting down (attack<0) compresses the ball and adds backspin; up sheds it.
+  const attackSpin = THREE.MathUtils.clamp(1 - attack * ATTACK_SPIN_GAIN, 0.55, 1.5);
+  const omega = ((club.spinRpm * 2 * Math.PI) / 60) * Math.max(0, spinScale) * attackSpin;
   // "right of flight" horizontal unit (matches the world's -z forward).
   const rx = Math.cos(aimRad);
   const rz = Math.sin(aimRad);
@@ -182,7 +190,7 @@ export function clubInitialVelocity(
   club: Club,
   power: number,
   aimRad: number,
-  opts: { chip?: boolean } = {},
+  opts: { chip?: boolean; attack?: number } = {},
 ): THREE.Vector3 {
   const p = THREE.MathUtils.clamp(power, 0.05, 1);
   if (club.putter) {
@@ -190,14 +198,17 @@ export function clubInitialVelocity(
     return new THREE.Vector3(Math.sin(aimRad) * speed, 0, -Math.cos(aimRad) * speed);
   }
   const chip = !!opts.chip;
+  const attack = opts.attack ?? 0;
   // Full shots map power linearly to carry (50% pull ~= 50% distance). Chips
   // use a gentler quadratic response so a soft input stays short and lands on
   // the green instead of flying over — and the meter is far less touchy.
   const targetCarry = chip ? club.carry * p * p : club.carry * p;
   // The launch speed for that carry is solved against the real aerodynamic
   // flight at the chip/full launch angle, so distance stays honest.
+  // Carry is solved at the neutral launch (attack 0) so distances stay honest;
+  // the attack angle then tilts the actual launch up or down around that.
   const speed = solveLaunchSpeed(club, targetCarry, chip);
-  const la = launchAngleFor(club.loft, chip);
+  const la = launchAngleFor(club.loft, chip, attack);
   const horizontal = Math.cos(la) * speed;
   const vertical = Math.sin(la) * speed;
   return new THREE.Vector3(
