@@ -395,3 +395,13 @@ TODO:
   - Generated `RawAudio` is played through `toBlob()` object URLs at 82% volume, with a short queue capped to the latest four calls.
   - Wired commentary for first tee/player turns, hole changes, water penalties, bunker/rough/green landings, and hole-outs.
   - `npx tsc --noEmit` and `npm run build` pass. Build emits a separate `kokoro-*.js` chunk and `ort-wasm-simd-threaded.jsep-*.wasm`; first use still depends on downloading/caching Kokoro model files from Hugging Face.
+- Broadcast camera cut pass:
+  - Added a short post-impact camera sequence in `src/App.tsx`: the existing swing follow-through keeps the tee/player view, the current flight camera follows the ball, then first ground contact triggers a low landing close-up for 2.2 seconds.
+  - Landing close-up stores the touchdown position and incoming velocity so the camera sits behind/aside the landing line and tracks the ball as it rolls out.
+  - Reset, turn-switch, water-penalty, holed, and overhead-view paths clear or bypass the close-up so the shot camera cannot leak into the next lie.
+  - `npx tsc --noEmit` and `npm run build` pass. Build still has the existing large chunk warning.
+- Natural green shape pass:
+  - Replaced the multi-ellipse green generator with one continuous rotated green footprint per hole, preserving larger green sizes while removing the visible "two greens combined" overlap look.
+  - Kept the special round island green on Hole 4.
+  - Gameplay surface classification, 3D rendering, and minimap all still read from the same `greenZones` data.
+  - `npx tsc --noEmit` and `npm run build` pass. Build still has the existing large chunk warning.

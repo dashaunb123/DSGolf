@@ -37,6 +37,7 @@ const IMPACT_T = 0.42;       // fraction of swing at which ball is struck
 const PUTT_AIM_STEP = 0.007;
 const FULL_AIM_STEP = 0.025;
 const STOP_SPEED = 0.1;
+const LANDING_CLOSEUP_DURATION = 2.2;
 const BIRDS_VOLUME = 0.45;
 const MUSIC_VOLUME = 0.1;
 const SWING_VOLUME = 0.85;
@@ -326,6 +327,12 @@ type PhoneSyncState = {
 };
 
 type Handedness = "right" | "left";
+
+type BroadcastCameraState = {
+  landingStart: number | null;
+  landingPos: THREE.Vector3;
+  landingVel: THREE.Vector3;
+};
 
 function GameplayAudio({ onReady }: { onReady: (playSwing: () => void) => void }) {
   const unlockedRef = useRef(false);
@@ -2232,6 +2239,11 @@ function Game(props: GameProps) {
   const introStartRef = useRef<number | null>(null);
   const introHoleRef = useRef<number>(-1);
   const introCompleteFiredRef = useRef(false);
+  const broadcastCameraRef = useRef<BroadcastCameraState>({
+    landingStart: null,
+    landingPos: new THREE.Vector3(),
+    landingVel: new THREE.Vector3(),
+  });
   const { camera } = useThree();
 
   const applyWaterPenalty = () => {
@@ -2243,6 +2255,7 @@ function Game(props: GameProps) {
     phys.mode = "idle";
     phys.shape = 0;
     phys.spin.set(0, 0, 0);
+    broadcastCameraRef.current.landingStart = null;
     const landedSurface = classifySurface(phys.pos, layout);
     props.aimRef.current = aimToCup(phys.pos, layout);
     props.onLanded(landedSurface, distToCup(phys.pos, layout), true, phys.pos, phys.strokes);
@@ -2277,6 +2290,7 @@ function Game(props: GameProps) {
     props.shotShapeRef.current = 0;
     props.shotSpinQualityRef.current = 1;
     props.shotAttackRef.current = 0;
+    broadcastCameraRef.current.landingStart = null;
     phys.mode = club.putter ? "rolling" : "flight";
     phys.strokes += 1;
     props.onImpact?.();
@@ -2319,6 +2333,7 @@ function Game(props: GameProps) {
       props.shotShapeRef.current = 0;
       props.displayPowerRef.current = 0;
       phys.shape = 0;
+      broadcastCameraRef.current.landingStart = null;
     }
 
     // charge animation while holding space
@@ -2376,6 +2391,11 @@ function Game(props: GameProps) {
         phys.pos.y = 0.06;
         const club = CLUBS[props.clubIdxRef.current];
         const surf = classifySurface(phys.pos, layout);
+        if (broadcastCameraRef.current.landingStart === null) {
+          broadcastCameraRef.current.landingStart = now;
+          broadcastCameraRef.current.landingPos.copy(phys.pos);
+          broadcastCameraRef.current.landingVel.copy(phys.vel);
+        }
         if (surf === "water") {
           applyWaterPenalty();
           return;
@@ -2525,6 +2545,15 @@ function Game(props: GameProps) {
       let lookAt: THREE.Vector3;
       const surface = classifySurface(phys.pos, layout);
       const swingActive = swingStartRef.current !== null;
+      const landingAge =
+        broadcastCameraRef.current.landingStart === null
+          ? Number.POSITIVE_INFINITY
+          : (now - broadcastCameraRef.current.landingStart) / 1000;
+      const landingCloseup =
+        landingAge <= LANDING_CLOSEUP_DURATION &&
+        !phys.sunk &&
+        phys.mode !== "holed" &&
+        props.viewMode !== "overhead";
       const puttingView =
         phys.mode === "idle" && surface === "green" && !phys.sunk;
       if (props.viewMode === "overhead" && phys.mode === "idle" && !phys.sunk) {
@@ -2547,6 +2576,24 @@ function Game(props: GameProps) {
           phys.mode === "idle"
             ? anchor.clone().add(new THREE.Vector3(0, 0.6, 0))
             : phys.pos.clone().add(new THREE.Vector3(0, 0.3, 0));
+      } else if (landingCloseup) {
+        const landing = broadcastCameraRef.current;
+        const speed = Math.hypot(landing.landingVel.x, landing.landingVel.z);
+        const forward =
+          speed > 0.2
+            ? new THREE.Vector3(landing.landingVel.x / speed, 0, landing.landingVel.z / speed)
+            : aimDir;
+        const back = forward.clone().multiplyScalar(-1);
+        const side = new THREE.Vector3(-forward.z, 0, forward.x);
+        const focus = phys.pos
+          .clone()
+          .lerp(landing.landingPos, THREE.MathUtils.clamp(0.35 - landingAge * 0.08, 0, 0.35));
+        desired = focus
+          .clone()
+          .addScaledVector(back, 3.8)
+          .addScaledVector(side, 1.15)
+          .add(new THREE.Vector3(0, 1.25, 0));
+        lookAt = focus.clone().add(new THREE.Vector3(0, 0.18, 0));
       } else if (phys.mode === "flight" || phys.mode === "rolling") {
         const v = phys.vel;
         const sp = Math.hypot(v.x, v.z);

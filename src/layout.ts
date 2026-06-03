@@ -597,48 +597,17 @@ function makeGreenZones(spec: HoleSpec, greenZ: number, size: number): GreenZone
     return [{ x: 0, z: greenZ, rx: spec.greenRadius, rz: spec.greenRadius, rot: 0 }];
   }
 
-  const variant = spec.number % 6;
-
-  if (variant === 1) {
-    return [
-      { x: 0, z: greenZ, rx: size * 1.18, rz: size * 0.86, rot: 0.18 },
-      { x: -size * 0.5, z: greenZ + size * 0.15, rx: size * 0.58, rz: size * 0.52, rot: -0.35 },
-    ];
-  }
-
-  if (variant === 2) {
-    return [
-      { x: 0, z: greenZ, rx: size * 0.95, rz: size * 1.22, rot: -0.12 },
-      { x: size * 0.55, z: greenZ - size * 0.2, rx: size * 0.55, rz: size * 0.6, rot: 0.4 },
-    ];
-  }
-
-  if (variant === 3) {
-    return [
-      { x: -size * 0.28, z: greenZ + size * 0.1, rx: size * 0.82, rz: size * 0.92, rot: 0.35 },
-      { x: size * 0.48, z: greenZ - size * 0.18, rx: size * 0.78, rz: size * 0.72, rot: -0.25 },
-    ];
-  }
-
-  if (variant === 4) {
-    return [
-      { x: 0, z: greenZ, rx: size * 1.3, rz: size * 0.82, rot: -0.42 },
-      { x: size * 0.28, z: greenZ + size * 0.45, rx: size * 0.48, rz: size * 0.48, rot: 0 },
-    ];
-  }
-
-  if (variant === 5) {
-    return [
-      { x: 0, z: greenZ, rx: size * 0.78, rz: size * 1.32, rot: 0.32 },
-      { x: -size * 0.48, z: greenZ - size * 0.38, rx: size * 0.52, rz: size * 0.5, rot: 0 },
-      { x: size * 0.45, z: greenZ + size * 0.34, rx: size * 0.5, rz: size * 0.48, rot: 0 },
-    ];
-  }
-
-  return [
-    { x: 0, z: greenZ, rx: size * 1.08, rz: size * 1.0, rot: 0 },
-    { x: size * 0.52, z: greenZ, rx: size * 0.55, rz: size * 0.7, rot: -0.2 },
+  const greenShapes = [
+    { rx: 1.18, rz: 0.88, rot: 0.16 },
+    { rx: 0.92, rz: 1.18, rot: -0.14 },
+    { rx: 1.08, rz: 1.02, rot: 0.28 },
+    { rx: 1.28, rz: 0.82, rot: -0.38 },
+    { rx: 0.84, rz: 1.28, rot: 0.34 },
+    { rx: 1.1, rz: 0.96, rot: -0.08 },
   ];
+  const shape = greenShapes[spec.number % greenShapes.length];
+
+  return [{ x: 0, z: greenZ, rx: size * shape.rx, rz: size * shape.rz, rot: shape.rot }];
 }
 
 function greenBoundsRadius(greenCenterZ: number, greenZones: GreenZone[]) {
