@@ -111,13 +111,17 @@ export const COURSE_HOLES: HoleSpec[] = [
       { x: 43, z: -188, scale: 1.9 },
     ],
   },
-  // 4: Short par-3 island green – tiny patch of fairway floating in rough.
+  // 4: Short par-3 island green – a big, round green ringed by a clean water
+  // moat. No bunkers: it's an island, so there's no land for sand (and any
+  // bunker would just sit on the green and classify ahead of it). greenRadius
+  // here is the literal green radius — makeGreenZones special-cases hole 4 to a
+  // single round green of this size, and it also drives the moat sizing.
   {
     number: 4,
     par: 3,
     yardage: 145,
     fairwayWidth: 10,
-    greenRadius: 5,
+    greenRadius: 20,
     cupOffsetX: 0,
     cupOffsetZ: 0.4,
     bunkerSide: 1,
@@ -127,16 +131,11 @@ export const COURSE_HOLES: HoleSpec[] = [
       { kind: "circle", x: 0, z: 55, r: 9 },
       { kind: "circle", x: 0, z: 10, r: 7 },
     ],
-    bunkers: [
-      { x: -7, z: -55, rx: 3.4, rz: 3.2 },
-      { x: 7, z: -55, rx: 3.4, rz: 3.2 },
-      { x: 0, z: -48, rx: 2.4, rz: 2.4 },
-    ],
+    bunkers: [],
+    // Only the forward pair — the back trees would now stand in the moat.
     trees: [
       { x: -14, z: 30, scale: 1.6 },
       { x: 14, z: 30, scale: 1.6 },
-      { x: -16, z: -30, scale: 1.8 },
-      { x: 16, z: -30, scale: 1.8 },
     ],
   },
   // 5: Sharp dogleg-left par-4.
@@ -590,6 +589,13 @@ export type HoleLayout = ReturnType<typeof makeHoleLayout>;
 const GREEN_SIZE_MULTIPLIER = 1.65;
 
 function makeGreenZones(spec: HoleSpec, greenZ: number, size: number): GreenZone[] {
+  // Hole 4 ("The Island") is a single big round green so the surrounding water
+  // reads as a clean moat instead of poking into an irregular green's gaps.
+  // Its greenRadius is used as the literal radius (see the hole-4 spec note).
+  if (spec.number === 4) {
+    return [{ x: 0, z: greenZ, rx: spec.greenRadius, rz: spec.greenRadius, rot: 0 }];
+  }
+
   const variant = spec.number % 6;
 
   if (variant === 1) {
