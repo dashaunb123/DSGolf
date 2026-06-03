@@ -239,10 +239,24 @@ function buildRig(fbx: THREE.Group, texture: THREE.Texture): Rig {
   const root = cloneRig(fbx) as THREE.Group;
 
   texture.colorSpace = THREE.SRGBColorSpace;
+  // This is a Mixamo auto-bake: the skin/clothing live in many small UV islands.
+  // Mipmapping averages across the gaps between islands, which shows up as the
+  // "cracked squares" seam pattern. Sampling the full-res texture directly
+  // (no mipmaps) with anisotropic filtering keeps each island clean.
+  texture.generateMipmaps = false;
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  texture.anisotropy = 8;
+  texture.needsUpdate = true;
   const material = new THREE.MeshStandardMaterial({
     map: texture,
-    roughness: 0.82,
-    metalness: 0.05,
+    roughness: 0.85,
+    metalness: 0.0,
+    // Lift the character out of shadow so the (fairly light) texture doesn't
+    // read as a dark muddy mass under the course lighting.
+    emissiveMap: texture,
+    emissive: new THREE.Color("#ffffff"),
+    emissiveIntensity: 0.22,
   });
   root.traverse((obj) => {
     const skinned = obj as THREE.SkinnedMesh;

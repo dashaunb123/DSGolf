@@ -278,12 +278,13 @@ export const COURSE_HOLES: HoleSpec[] = [
     fairways: [
       { kind: "circle", x: 0, z: 60, r: 8 },
     ],
+    // Big green (front edge ~z=-59, spans x=-20..23) — bunkers guard the front
+    // short of it and flank the sides, none on the green itself.
     bunkers: [
-      { x: -8, z: -75, rx: 3.6, rz: 3.6 },
-      { x: 8, z: -75, rx: 3.6, rz: 3.6 },
-      { x: -10, z: -90, rx: 3.0, rz: 3.0 },
-      { x: 10, z: -90, rx: 3.0, rz: 3.0 },
-      { x: 0, z: -95, rx: 2.4, rz: 2.4 },
+      { x: -14, z: -50, rx: 3.6, rz: 4.0 },
+      { x: 14, z: -50, rx: 3.6, rz: 4.0 },
+      { x: -27, z: -76, rx: 3.4, rz: 4.4 },
+      { x: 29, z: -76, rx: 3.4, rz: 4.4 },
     ],
     trees: [
       { x: -14, z: 30, scale: 1.7 },
@@ -433,13 +434,13 @@ export const COURSE_HOLES: HoleSpec[] = [
       { kind: "rect", x: 0, z: 30, w: 12, d: 70 },
       { kind: "circle", x: 0, z: -50, r: 9 },
     ],
+    // Green front edge ~z=-55 (spans x=-13..15) — keep the traps short of and
+    // beside the green, never on it.
     bunkers: [
-      { x: -10, z: -65, rx: 4.0, rz: 3.4 },
-      { x: 10, z: -65, rx: 4.0, rz: 3.4 },
-      // Front-wall trap just in front of the green (was at z=-70, on the green).
-      { x: 0, z: -66, rx: 6.0, rz: 2.0 },
-      { x: -8, z: -85, rx: 2.4, rz: 2.4 },
-      { x: 8, z: -85, rx: 2.4, rz: 2.4 },
+      { x: -13, z: -48, rx: 3.6, rz: 3.2 },
+      { x: 13, z: -48, rx: 3.6, rz: 3.2 },
+      { x: -19, z: -68, rx: 3.0, rz: 4.2 },
+      { x: 20, z: -68, rx: 3.0, rz: 4.2 },
     ],
     trees: [
       { x: -12, z: 50, scale: 1.6 },
@@ -648,57 +649,10 @@ function greenBoundsRadius(greenCenterZ: number, greenZones: GreenZone[]) {
   );
 }
 
-// Water hazards are built from clusters of overlapping ellipses so they fuse
-// (in both the renderer and surface classification) into natural, organic
-// lakes — kidney-shaped ponds and lateral lakes like a real course, never
-// straight canals or perfect ovals.
-function makeWaterZones(spec: HoleSpec, greenZ: number, greenRadius: number): WaterZone[] {
-  if (spec.water) return spec.water;
-
-  switch (spec.number) {
-    // 4 — Island green: a round pond fully encircling the green, with an
-    // organic bay so the shoreline isn't a perfect ring.
-    case 4:
-      return [
-        { kind: "ellipse", x: 0, z: greenZ, rx: greenRadius + 12, rz: greenRadius + 12 },
-        { kind: "ellipse", x: -(greenRadius * 0.5), z: greenZ + greenRadius * 0.55, rx: greenRadius + 5, rz: greenRadius + 3, rot: 0.32 },
-        { kind: "ellipse", x: greenRadius * 0.55, z: greenZ - greenRadius * 0.45, rx: greenRadius + 4, rz: greenRadius + 4, rot: -0.4 },
-      ];
-    // 8 — a lateral lake down the left of the approach.
-    case 8:
-      return [
-        { kind: "ellipse", x: -15, z: -48, rx: 12, rz: 26, rot: -0.12 },
-        { kind: "ellipse", x: -20, z: -22, rx: 9, rz: 13, rot: 0.28 },
-        { kind: "ellipse", x: -10, z: -76, rx: 10, rz: 12, rot: 0.1 },
-      ];
-    // 11 — the Cape: a long lake hugging the left you cut the corner over,
-    // plus a pond guarding the front-left of the green.
-    case 11:
-      return [
-        { kind: "ellipse", x: -26, z: 92, rx: 13, rz: 46, rot: 0.05 },
-        { kind: "ellipse", x: -24, z: 22, rx: 14, rz: 38, rot: -0.05 },
-        { kind: "ellipse", x: -21, z: -42, rx: 11, rz: 30, rot: 0.05 },
-        { kind: "ellipse", x: -15, z: greenZ + 9, rx: 14, rz: 12, rot: 0.18 },
-      ];
-    // 15 — a wide pond cutting across before the final landing area.
-    case 15:
-      return [
-        { kind: "ellipse", x: 0, z: -120, rx: 20, rz: 11, rot: 0.05 },
-        { kind: "ellipse", x: -14, z: -124, rx: 9, rz: 8, rot: 0.3 },
-        { kind: "ellipse", x: 15, z: -116, rx: 10, rz: 9, rot: -0.2 },
-      ];
-    // 18 — peninsula green: a lake hugging the right/front of the green and a
-    // lateral lake running up the right of the closing hole.
-    case 18:
-      return [
-        { kind: "ellipse", x: 12, z: greenZ - 2, rx: greenRadius + 10, rz: greenRadius + 7, rot: -0.08 },
-        { kind: "ellipse", x: 21, z: greenZ + 20, rx: 12, rz: 16, rot: 0.22 },
-        { kind: "ellipse", x: 26, z: -150, rx: 13, rz: 50, rot: -0.03 },
-        { kind: "ellipse", x: 28, z: -92, rx: 11, rz: 28, rot: 0.06 },
-      ];
-    default:
-      return [];
-  }
+// No water hazards anywhere on the course. (A per-hole spec.water override is
+// still honored if one is ever added, but no hole defines one.)
+function makeWaterZones(spec: HoleSpec, _greenZ: number, _greenRadius: number): WaterZone[] {
+  return spec.water ?? [];
 }
 
 export function makeHoleLayout(spec: HoleSpec) {
