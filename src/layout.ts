@@ -648,28 +648,53 @@ function greenBoundsRadius(greenCenterZ: number, greenZones: GreenZone[]) {
   );
 }
 
+// Water hazards are built from clusters of overlapping ellipses so they fuse
+// (in both the renderer and surface classification) into natural, organic
+// lakes — kidney-shaped ponds and lateral lakes like a real course, never
+// straight canals or perfect ovals.
 function makeWaterZones(spec: HoleSpec, greenZ: number, greenRadius: number): WaterZone[] {
   if (spec.water) return spec.water;
 
   switch (spec.number) {
+    // 4 — Island green: a round pond fully encircling the green, with an
+    // organic bay so the shoreline isn't a perfect ring.
     case 4:
-      return [{ kind: "ellipse", x: 0, z: greenZ, rx: greenRadius + 13, rz: greenRadius + 10 }];
+      return [
+        { kind: "ellipse", x: 0, z: greenZ, rx: greenRadius + 12, rz: greenRadius + 12 },
+        { kind: "ellipse", x: -(greenRadius * 0.5), z: greenZ + greenRadius * 0.55, rx: greenRadius + 5, rz: greenRadius + 3, rot: 0.32 },
+        { kind: "ellipse", x: greenRadius * 0.55, z: greenZ - greenRadius * 0.45, rx: greenRadius + 4, rz: greenRadius + 4, rot: -0.4 },
+      ];
+    // 8 — a lateral lake down the left of the approach.
     case 8:
       return [
-        { kind: "rect", x: 5, z: -50, w: 16, d: 74, rot: -0.34 },
-        { kind: "ellipse", x: -8, z: -88, rx: 13, rz: 10, rot: 0.2 },
+        { kind: "ellipse", x: -15, z: -48, rx: 12, rz: 26, rot: -0.12 },
+        { kind: "ellipse", x: -20, z: -22, rx: 9, rz: 13, rot: 0.28 },
+        { kind: "ellipse", x: -10, z: -76, rx: 10, rz: 12, rot: 0.1 },
       ];
+    // 11 — the Cape: a long lake hugging the left you cut the corner over,
+    // plus a pond guarding the front-left of the green.
     case 11:
       return [
-        { kind: "rect", x: -26, z: 32, w: 28, d: 250, rot: -0.03 },
-        { kind: "ellipse", x: -18, z: greenZ, rx: 22, rz: greenRadius + 12, rot: 0.15 },
+        { kind: "ellipse", x: -26, z: 92, rx: 13, rz: 46, rot: 0.05 },
+        { kind: "ellipse", x: -24, z: 22, rx: 14, rz: 38, rot: -0.05 },
+        { kind: "ellipse", x: -21, z: -42, rx: 11, rz: 30, rot: 0.05 },
+        { kind: "ellipse", x: -15, z: greenZ + 9, rx: 14, rz: 12, rot: 0.18 },
       ];
+    // 15 — a wide pond cutting across before the final landing area.
     case 15:
-      return [{ kind: "rect", x: 0, z: -118, w: 42, d: 22, rot: 0.1 }];
+      return [
+        { kind: "ellipse", x: 0, z: -120, rx: 20, rz: 11, rot: 0.05 },
+        { kind: "ellipse", x: -14, z: -124, rx: 9, rz: 8, rot: 0.3 },
+        { kind: "ellipse", x: 15, z: -116, rx: 10, rz: 9, rot: -0.2 },
+      ];
+    // 18 — peninsula green: a lake hugging the right/front of the green and a
+    // lateral lake running up the right of the closing hole.
     case 18:
       return [
-        { kind: "ellipse", x: 9, z: greenZ + 3, rx: greenRadius + 14, rz: greenRadius + 10, rot: -0.08 },
-        { kind: "rect", x: 21, z: -150, w: 22, d: 118, rot: 0.1 },
+        { kind: "ellipse", x: 12, z: greenZ - 2, rx: greenRadius + 10, rz: greenRadius + 7, rot: -0.08 },
+        { kind: "ellipse", x: 21, z: greenZ + 20, rx: 12, rz: 16, rot: 0.22 },
+        { kind: "ellipse", x: 26, z: -150, rx: 13, rz: 50, rot: -0.03 },
+        { kind: "ellipse", x: 28, z: -92, rx: 11, rz: 28, rot: 0.06 },
       ];
     default:
       return [];

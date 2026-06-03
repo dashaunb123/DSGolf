@@ -1624,9 +1624,7 @@ function HoleMapSvg({
             cy={mapY(water.z)}
             rx={water.rx * scale}
             ry={water.rz * scale}
-            fill="#1c86a3"
-            stroke="#174f61"
-            strokeWidth={compact ? 1.2 : 2.4}
+            fill="#1d6485"
             transform={`rotate(${-(water.rot || 0) * 180 / Math.PI} ${mapX(water.x)} ${mapY(water.z)})`}
           />
         ) : (
@@ -1637,9 +1635,7 @@ function HoleMapSvg({
             width={water.w * scale}
             height={water.d * scale}
             rx={Math.min(water.w * scale * 0.45, compact ? 7 : 14)}
-            fill="#1c86a3"
-            stroke="#174f61"
-            strokeWidth={compact ? 1.2 : 2.4}
+            fill="#1d6485"
             transform={`rotate(${-(water.rot || 0) * 180 / Math.PI} ${mapX(water.x)} ${mapY(water.z)})`}
           />
         ),

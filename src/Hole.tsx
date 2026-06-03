@@ -47,59 +47,82 @@ function FairwayDetail({ zone, index }: { zone: FairwayZone; index: number }) {
   );
 }
 
-function WaterPatch({ zone, index }: { zone: WaterZone; index: number }) {
-  const rot = zone.rot || 0;
-  const waveColor = index % 2 === 0 ? "#d6fbff" : "#b9edf7";
+// Realistic still-water palette (viewed top-down): a grassy/marshy shore lip,
+// a darker deep band at the edges, the main lake-blue surface, and a soft sky
+// reflection. No cartoon ripple rings.
+const WATER_SHORE = "#34543f";
+const WATER_EDGE = "#0f3a4e";
+const WATER_MAIN = "#1d6485";
+const WATER_SHEEN = "#7cbad6";
 
+// One flat layer of a water body. Ellipse zones scale a disc; rect zones scale
+// a plane. `inflate` grows the shape (banks are drawn larger than the fill);
+// `offset` nudges the sky-sheen off-centre so it reads as a reflection.
+function WaterLayer({
+  zone,
+  y,
+  inflate,
+  color,
+  opacity = 1,
+  roughness = 0.9,
+  metalness = 0,
+  offset = false,
+}: {
+  zone: WaterZone;
+  y: number;
+  inflate: number;
+  color: string;
+  opacity?: number;
+  roughness?: number;
+  metalness?: number;
+  offset?: boolean;
+}) {
+  const rot = zone.rot || 0;
+  const transparent = opacity < 1;
   if (zone.kind === "ellipse") {
+    const ox = offset ? zone.rx * 0.16 : 0;
+    const oy = offset ? -zone.rz * 0.12 : 0;
     return (
-      <group rotation={[-Math.PI / 2, 0, rot]} position={[zone.x, 0.017, zone.z]}>
-        <mesh scale={[zone.rx * 1.05, zone.rz * 1.05, 1]} receiveShadow>
-          <ringGeometry args={[0.91, 1, 72]} />
-          <meshStandardMaterial color="#234f45" roughness={0.95} />
+      <group rotation={[-Math.PI / 2, 0, rot]} position={[zone.x, y, zone.z]}>
+        <mesh position={[ox, oy, 0]} scale={[zone.rx * inflate, zone.rz * inflate, 1]} receiveShadow>
+          <circleGeometry args={[1, 80]} />
+          <meshStandardMaterial color={color} roughness={roughness} metalness={metalness} transparent={transparent} opacity={opacity} />
         </mesh>
-        <mesh scale={[zone.rx, zone.rz, 1]} receiveShadow>
-          <circleGeometry args={[1, 96]} />
-          <meshStandardMaterial color="#177c99" roughness={0.18} metalness={0.08} transparent opacity={0.88} />
-        </mesh>
-        <mesh position={[0, 0, 0.004]} scale={[zone.rx * 0.76, zone.rz * 0.7, 1]}>
-          <circleGeometry args={[1, 72]} />
-          <meshStandardMaterial color="#42b8cc" roughness={0.12} metalness={0.15} transparent opacity={0.32} />
-        </mesh>
-        {[0.3, 0.48, 0.66, 0.82].map((r, i) => (
-          <mesh
-            key={`water-ellipse-ripple-${index}-${i}`}
-            position={[0, 0, 0.007 + i * 0.001]}
-            scale={[zone.rx, zone.rz, 1]}
-          >
-            <ringGeometry args={[r, r + 0.01, 72]} />
-            <meshStandardMaterial color={waveColor} roughness={0.28} transparent opacity={0.18 - i * 0.025} />
-          </mesh>
-        ))}
       </group>
     );
   }
-
-  const stripeCount = Math.max(4, Math.floor(zone.d / 18));
+  const ox = offset ? zone.w * 0.14 : 0;
+  const oy = offset ? -zone.d * 0.1 : 0;
   return (
-    <group rotation={[-Math.PI / 2, 0, rot]} position={[zone.x, 0.017, zone.z]}>
-      <mesh position={[0, 0, -0.002]} receiveShadow>
-        <planeGeometry args={[zone.w * 1.08, zone.d * 1.04]} />
-        <meshStandardMaterial color="#234f45" roughness={0.95} />
+    <group rotation={[-Math.PI / 2, 0, rot]} position={[zone.x, y, zone.z]}>
+      <mesh position={[ox, oy, 0]} receiveShadow>
+        <planeGeometry args={[zone.w * inflate, zone.d * inflate]} />
+        <meshStandardMaterial color={color} roughness={roughness} metalness={metalness} transparent={transparent} opacity={opacity} />
       </mesh>
-      <mesh receiveShadow>
-        <planeGeometry args={[zone.w, zone.d]} />
-        <meshStandardMaterial color="#177c99" roughness={0.18} metalness={0.08} transparent opacity={0.88} />
-      </mesh>
-      {Array.from({ length: stripeCount }).map((_, i) => {
-        const z = -zone.d / 2 + ((i + 0.5) * zone.d) / stripeCount;
-        return (
-          <mesh key={`water-rect-ripple-${index}-${i}`} position={[0, z, 0.006 + i * 0.001]}>
-            <planeGeometry args={[zone.w * (0.55 + (i % 2) * 0.22), 0.18]} />
-            <meshStandardMaterial color={waveColor} roughness={0.25} transparent opacity={0.2} />
-          </mesh>
-        );
-      })}
+    </group>
+  );
+}
+
+// Render every water body in stacked passes so that overlapping ellipses fuse
+// into a single organic lake: shore + deep-edge are drawn first and larger, the
+// opaque main fill on top covers all the internal overlaps, and a soft sheen
+// finishes it. Shorelines therefore only show on the outer union boundary.
+function WaterField({ zones }: { zones: WaterZone[] }) {
+  if (zones.length === 0) return null;
+  return (
+    <group>
+      {zones.map((zone, i) => (
+        <WaterLayer key={`shore-${i}`} zone={zone} y={0.0158} inflate={1.18} color={WATER_SHORE} roughness={0.96} />
+      ))}
+      {zones.map((zone, i) => (
+        <WaterLayer key={`deep-${i}`} zone={zone} y={0.0168} inflate={1.05} color={WATER_EDGE} roughness={0.6} metalness={0.08} />
+      ))}
+      {zones.map((zone, i) => (
+        <WaterLayer key={`fill-${i}`} zone={zone} y={0.018} inflate={1.0} color={WATER_MAIN} roughness={0.32} metalness={0.1} />
+      ))}
+      {zones.map((zone, i) => (
+        <WaterLayer key={`sheen-${i}`} zone={zone} y={0.0188} inflate={0.6} color={WATER_SHEEN} roughness={0.12} metalness={0.18} opacity={0.3} offset />
+      ))}
     </group>
   );
 }
@@ -160,9 +183,7 @@ export function Hole({
       ))}
 
       {/* Water hazards */}
-      {layout.water.map((zone, index) => (
-        <WaterPatch key={`water-${index}`} zone={zone} index={index} />
-      ))}
+      <WaterField zones={layout.water} />
 
       {/* Tee box */}
       <mesh position={[0, 0.05, teeZ]} receiveShadow>
