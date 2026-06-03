@@ -1,6 +1,6 @@
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Line } from "@react-three/drei";
-import { Fragment, Suspense, forwardRef, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, Suspense, forwardRef, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import * as THREE from "three";
 import { Hole } from "./Hole";
 import { Player, type SwingState, type SwingMode } from "./Player";
@@ -44,7 +44,7 @@ const COMMENTARY_VOLUME = 0.82;
 
 type Mode = "idle" | "flight" | "rolling" | "holed";
 type ViewMode = "play" | "overhead";
-type ScreenMode = "menu" | "lobby" | "loading" | "playing" | "controller";
+type ScreenMode = "menu" | "lobby" | "askCommentary" | "loading" | "playing" | "controller";
 
 type ScoreEntry = {
   strokes: number;
@@ -2914,11 +2914,13 @@ function GolfGame({
   players: playersProp,
   gameSettings = DEFAULT_GAME_SETTINGS,
   onGameSettingsChange,
+  commentaryEnabled = true,
 }: {
   hostInfo?: HostInfo;
   players?: GolfPlayer[];
   gameSettings?: GameSettings;
   onGameSettingsChange?: (patch: Partial<GameSettings>) => void;
+  commentaryEnabled?: boolean;
 }) {
   const players = useMemo<GolfPlayer[]>(
     () => (playersProp && playersProp.length > 0 ? playersProp : [defaultPlayer(0, "local", "solo")]),
@@ -3642,7 +3644,9 @@ function GolfGame({
         />
       </Canvas>
       <GameplayAudio onReady={handleAudioReady} />
-      <KokoroCommentator onReady={handleCommentatorReady} />
+      {/* Only mounted when the player opted into commentary; otherwise
+          commentatorSpeakRef stays its default no-op and nothing downloads. */}
+      {commentaryEnabled && <KokoroCommentator onReady={handleCommentatorReady} />}
       <HUD
         club={club}
         clubIdx={hud.clubIdx}
@@ -4737,6 +4741,73 @@ function LoadingScreen({ players, onDone }: { players: GolfPlayer[]; onDone: () 
   );
 }
 
+// Asked once before a round: opt into the AI commentator (which has to
+// download a voice model up front) or skip straight to playing.
+function CommentaryPrompt({ onChoose }: { onChoose: (enabled: boolean) => void }) {
+  const btnBase: CSSProperties = {
+    padding: "14px 18px",
+    borderRadius: 12,
+    border: "none",
+    fontSize: 15,
+    fontWeight: 800,
+    cursor: "pointer",
+    fontFamily: "-apple-system, system-ui, sans-serif",
+  };
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 1000,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 24,
+        background:
+          "radial-gradient(120% 120% at 50% 0%, #7fc7ff 0%, #4a90d9 38%, #1e3a5f 100%)",
+        fontFamily: "-apple-system, system-ui, sans-serif",
+        color: "white",
+      }}
+    >
+      <div
+        style={{
+          width: "min(460px, 92vw)",
+          background: "rgba(15,28,46,0.72)",
+          border: "1px solid rgba(255,255,255,0.18)",
+          borderRadius: 18,
+          padding: "28px 26px",
+          textAlign: "center",
+          boxShadow: "0 20px 60px rgba(0,0,0,0.45)",
+        }}
+      >
+        <div style={{ fontSize: 30 }} aria-hidden>🎙️</div>
+        <div style={{ fontSize: 24, fontWeight: 800, marginTop: 8 }}>Live Commentary?</div>
+        <p style={{ fontSize: 14, lineHeight: 1.5, opacity: 0.9, margin: "12px 0 22px" }}>
+          Add an AI play-by-play commentator to your round. Heads up: the first
+          time, it downloads a voice model and pre-records the calls — this can
+          take a few minutes. After that it plays instantly.
+        </p>
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <button
+            type="button"
+            onClick={() => onChoose(true)}
+            style={{ ...btnBase, background: "linear-gradient(90deg, #ffd166, #ff9d2e)", color: "#1e3a5f" }}
+          >
+            Yes — with commentary
+          </button>
+          <button
+            type="button"
+            onClick={() => onChoose(false)}
+            style={{ ...btnBase, background: "rgba(255,255,255,0.16)", color: "white" }}
+          >
+            No — just start playing
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function App({ onExitToMenu }: { onExitToMenu?: () => void } = {}) {
   const params = new URLSearchParams(window.location.search);
   const startAsController = params.get("controller") === "1";
@@ -4747,6 +4818,7 @@ export function App({ onExitToMenu }: { onExitToMenu?: () => void } = {}) {
   const [error, setError] = useState("");
   const [players, setPlayers] = useState<GolfPlayer[]>([]);
   const [gameSettings, setGameSettings] = useState<GameSettings>(DEFAULT_GAME_SETTINGS);
+  const [commentaryEnabled, setCommentaryEnabled] = useState(true);
 
   const exitButton = onExitToMenu ? (
     <button
@@ -4800,9 +4872,23 @@ export function App({ onExitToMenu }: { onExitToMenu?: () => void } = {}) {
   const startSolo = () => {
     setHostInfo(null);
     setPlayers([defaultPlayer(0, "local", "solo")]);
-    setMode("loading");
+    setMode("askCommentary");
   };
 
+  // Player picked commentary on/off. With commentary we go through the loader
+  // (download model + pre-record lines); without it we jump straight to play.
+  const chooseCommentary = (enabled: boolean) => {
+    setCommentaryEnabled(enabled);
+    setMode(enabled ? "loading" : "playing");
+  };
+
+  if (mode === "askCommentary")
+    return (
+      <>
+        {exitButton}
+        <CommentaryPrompt onChoose={chooseCommentary} />
+      </>
+    );
   if (mode === "loading")
     return (
       <>
@@ -4819,6 +4905,7 @@ export function App({ onExitToMenu }: { onExitToMenu?: () => void } = {}) {
           players={players}
           gameSettings={gameSettings}
           onGameSettingsChange={(patch) => setGameSettings((prev) => ({ ...prev, ...patch }))}
+          commentaryEnabled={commentaryEnabled}
         />
       </>
     );
@@ -4832,7 +4919,7 @@ export function App({ onExitToMenu }: { onExitToMenu?: () => void } = {}) {
           setPlayers={setPlayers}
           gameSettings={gameSettings}
           onGameSettingsChange={(patch) => setGameSettings((prev) => ({ ...prev, ...patch }))}
-          onStart={() => setMode("loading")}
+          onStart={() => setMode("askCommentary")}
           onCancel={() => {
             setHostInfo(null);
             setPlayers([]);
